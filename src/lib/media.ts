@@ -1,7 +1,7 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { joinPath } from "./document-kind";
 import { isTauriRuntime, pastedStoreDir, pastedStoreDirSync, readBytes } from "./native";
-import { isPasteRef, pasteRefName } from "./paste-image";
+import { bytesToDataUrl, isPasteRef, pasteRefName } from "./paste-image";
 import { isEmbeddablePreviewSrc, previewImageHtml } from "./preview-image";
 
 const blobByRef = new Map<string, string>();
@@ -28,8 +28,8 @@ export function splitMarkdownDestination(raw: string): { url: string; title: str
 export function cacheMediaBytes(ref: string, bytes: Uint8Array, ext: string): string {
   const key = normalizeRef(ref);
   const previous = blobByRef.get(key);
-  if (previous) URL.revokeObjectURL(previous);
-  const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: mimeFromExt(ext) }));
+  if (previous?.startsWith("blob:")) URL.revokeObjectURL(previous);
+  const url = bytesToDataUrl(bytes, mimeFromExt(ext));
   blobByRef.set(key, url);
   for (const missed of [...missByRef]) {
     if (missed.endsWith(`::${key}`)) missByRef.delete(missed);
@@ -103,20 +103,18 @@ export function applyPreviewMedia(root: ParentNode, baseDir: string | null): voi
   }
 }
 
-export function renderMarkdownImage(alt: string, destination: string, baseDir: string | null): string {
+export function renderMarkdownImage(alt: string, destination: string, _baseDir: string | null): string {
   const { url, title } = splitMarkdownDestination(destination);
-  const src = resolveMediaSrc(url, baseDir, false);
-  return previewImageHtml(alt, url, src, title);
+  const remote = /^https?:\/\//i.test(url) || /^data:image\//i.test(url) ? url : null;
+  return previewImageHtml(alt, url, remote, title);
 }
 
-export function rewriteHtmlMedia(html: string, baseDir: string | null): string {
+export function rewriteHtmlMedia(html: string, _baseDir: string | null): string {
   return html.replace(/<img\b([^>]*?)\bsrc=("[^"]*"|'[^']*')/gi, (full, attrs: string, quoted: string) => {
     const raw = quoted.slice(1, -1);
-    if (/^https?:\/\//i.test(raw) || /^data:image\//i.test(raw)) return full;
-    const resolved = resolveMediaSrc(raw, baseDir, false);
-    const embed = resolved && isEmbeddablePreviewSrc(resolved) ? resolved : "";
+    if (isEmbeddablePreviewSrc(raw)) return full;
     const ref = ` data-media-ref="${escapeAttr(raw)}"`;
-    return `<img${attrs}src="${escapeAttr(embed)}"${ref}`;
+    return `<img${attrs}${ref}`;
   });
 }
 

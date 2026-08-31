@@ -15,19 +15,21 @@ assert(none.length === 0, "blank find query should match nothing");
 const blobSrc = "blob:http://tauri.localhost/53ad5bd8-716c-43ed-9255-e2c0ff2eb4e3";
 assert(!isEmbeddablePreviewSrc(blobSrc), "blob URLs must not go into innerHTML");
 
+const assetSrc = "http://asset.localhost/C%3A%5CUsers%5CSalil%5CAppData%5CRoaming%5Cfile.png";
+assert(!isEmbeddablePreviewSrc(assetSrc), "asset.localhost URLs must not go into innerHTML");
+assert(!isEmbeddablePreviewSrc("https://asset.localhost/C:/file.png"), "https asset.localhost must not go into innerHTML");
+
 const blobHtml = previewImageHtml("image", "img/4a9802e1.png", blobSrc);
 assert(!blobHtml.includes("blob:"), `blob URL leaked into HTML:\n${blobHtml}`);
 assert(!blobHtml.includes("http://tauri.localhost"), `tauri blob host leaked into HTML:\n${blobHtml}`);
+assert(!/\ssrc=/.test(blobHtml), `local image HTML must not include src:\n${blobHtml}`);
 assert(blobHtml.includes('data-media-ref="img/4a9802e1.png"'), "local images keep a data-media-ref");
 assert(blobHtml.startsWith("<img "), "local images should render as img tags");
 assert(blobHtml.includes('alt="image"'), "alt text should stay on the tag");
 
-const assetHtml = previewImageHtml(
-  "image",
-  "img/4a9802e1.png",
-  "https://asset.localhost/C:/app/pasted/4a9802e1.png"
-);
-assert(assetHtml.includes('src="https://asset.localhost/C:/app/pasted/4a9802e1.png"'), "asset protocol src is allowed");
+const assetHtml = previewImageHtml("image", "img/4a9802e1.png", assetSrc);
+assert(!assetHtml.includes("asset.localhost"), `asset URL leaked into HTML:\n${assetHtml}`);
+assert(!/\ssrc=/.test(assetHtml), `asset URL must not be used as src in HTML:\n${assetHtml}`);
 assert(assetHtml.includes('data-media-ref="img/4a9802e1.png"'), "asset tags still keep the markdown ref");
 
 const remote = previewImageHtml("Markdown", "https://cdn.jsdelivr.net/logo.svg", "https://cdn.jsdelivr.net/logo.svg");

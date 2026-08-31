@@ -211,8 +211,8 @@ export function hello() {
     if (!previewEl || kind === "html") return;
     const prose = previewEl.querySelector(".prose");
     if (!(prose instanceof HTMLElement)) return;
-    applyPreviewMedia(prose, docDir);
     typesetMath(prose);
+    applyPreviewMedia(prose, docDir);
   });
 
   $effect(() => {

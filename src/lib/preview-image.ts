@@ -1,5 +1,13 @@
 export function isEmbeddablePreviewSrc(src: string): boolean {
-  return Boolean(src) && !/^blob:/i.test(src);
+  if (!src) return false;
+  if (/^data:image\//i.test(src)) return true;
+  if (!/^https?:\/\//i.test(src)) return false;
+  try {
+    const host = new URL(src).hostname.toLowerCase();
+    return host !== "asset.localhost" && host !== "tauri.localhost" && !host.endsWith(".localhost");
+  } catch {
+    return false;
+  }
 }
 
 export function previewImageHtml(alt: string, url: string, src: string | null, title = ""): string {
