@@ -25,7 +25,7 @@ Make the AppImage executable: `chmod +x readmd_*.AppImage`, then run it.
 
 Installed copies check GitHub Releases for newer versions and show an **Update now** bar. Command palette → **Check for updates**.
 
-Tag a version (`v0.3.1`) to cut a new release. GitHub Actions builds Windows and Linux installers, signs updater artifacts, and publishes `latest.json`.
+Tag a version (`v0.3.2`) to cut a new release. GitHub Actions builds Windows and Linux installers, signs updater artifacts, and publishes `latest.json`.
 
 ## Features
 

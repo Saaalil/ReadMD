@@ -1,5 +1,6 @@
 <script lang="ts">
   import CodeEditor from "./lib/CodeEditor.svelte";
+  import Welcome from "./lib/Welcome.svelte";
   import { dirFromPath, displayNameFromPath, documentKindFromName, kindLabel } from "./lib/document-kind";
   import { markdownToDocx } from "./lib/docx";
   import { withExtension } from "./lib/download";
@@ -81,6 +82,8 @@ export function hello() {
   let lastOpenDir = $state(initial.lastOpenDir);
   let lastSaveDir = $state(initial.lastSaveDir);
   let lastExportDir = $state(initial.lastExportDir);
+  let onboarded = $state(initial.onboarded);
+  let welcomeOpen = $state(!initial.onboarded);
   let notice = $state<{
     kind: "error" | "ok";
     text: string;
@@ -165,7 +168,8 @@ export function hello() {
       lastFile,
       lastOpenDir,
       lastSaveDir,
-      lastExportDir
+      lastExportDir,
+      onboarded
     });
   });
 
@@ -266,7 +270,10 @@ export function hello() {
       refreshPreview();
     };
     window.addEventListener("keydown", blockReload, true);
-    window.setTimeout(() => void offerUpdate(), 2500);
+    window.setTimeout(() => {
+      if (welcomeOpen) return;
+      void offerUpdate();
+    }, 2500);
     return () => window.removeEventListener("keydown", blockReload, true);
   });
 
@@ -460,6 +467,17 @@ export function hello() {
     }, 180);
   }
 
+  function finishWelcome(): void {
+    welcomeOpen = false;
+    onboarded = true;
+    void offerUpdate();
+  }
+
+  function replayWelcome(): void {
+    closeOverlays();
+    welcomeOpen = true;
+  }
+
   async function offerUpdate(manual = false): Promise<void> {
     const offer = await checkForAppUpdate();
     if (!offer) {
@@ -632,6 +650,8 @@ export function hello() {
 
   function handleWindowKeydown(event: KeyboardEvent): void {
     const key = event.key.toLowerCase();
+
+    if (welcomeOpen) return;
 
     if (paletteOpen) {
       if (event.key === "Escape") {
@@ -806,6 +826,7 @@ export function hello() {
     { id: "txt", label: "Export TXT", hint: "", run: () => void exportTxt() },
     { id: "copy-html", label: "Copy HTML", hint: "", run: () => void copyHtml() },
     { id: "copy-text", label: "Copy plain text", hint: "", run: () => void copyText() },
+    { id: "welcome", label: "Welcome tour", hint: "", run: replayWelcome },
     { id: "shortcuts", label: "Keyboard shortcuts", hint: "Ctrl+/", run: () => { paletteOpen = false; menu = "shortcuts"; } }
   ]);
 
@@ -833,6 +854,9 @@ export function hello() {
   ondragenter={handleDragEnter}
   ondragleave={handleDragLeave}
 >
+  {#if welcomeOpen}
+    <Welcome onDone={finishWelcome} />
+  {/if}
   <div class="shell">
   {#if updateOffer}
     <div class="update-bar" role="status">
