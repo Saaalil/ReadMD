@@ -2,6 +2,7 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { joinPath } from "./document-kind";
 import { isTauriRuntime, pastedStoreDir, pastedStoreDirSync, readBytes } from "./native";
 import { isPasteRef, pasteRefName } from "./paste-image";
+import { isEmbeddablePreviewSrc, previewImageHtml } from "./preview-image";
 
 const blobByRef = new Map<string, string>();
 const missByRef = new Set<string>();
@@ -68,16 +69,17 @@ export async function hydrateLocalImages(source: string, baseDir: string | null)
   return changed;
 }
 
-export function resolveMediaSrc(rawUrl: string, baseDir: string | null): string | null {
+export function resolveMediaSrc(rawUrl: string, baseDir: string | null, allowBlob = false): string | null {
   const url = stripBrackets(unescapeBasic(rawUrl).trim());
   if (!url) return null;
   const lower = url.toLowerCase();
   if (lower.startsWith("javascript:") || lower.startsWith("vbscript:")) return null;
-  if (/^https?:\/\//i.test(url) || /^data:image\//i.test(url) || /^blob:/i.test(url)) return url;
+  if (/^https?:\/\//i.test(url) || /^data:image\//i.test(url)) return url;
+  if (/^blob:/i.test(url)) return allowBlob ? url : null;
   if (/^data:/i.test(url)) return null;
 
   const cached = blobByRef.get(normalizeRef(url));
-  if (cached) return cached;
+  if (cached && allowBlob) return cached;
 
   if (!isTauriRuntime()) return null;
 
@@ -91,22 +93,30 @@ export function resolveMediaSrc(rawUrl: string, baseDir: string | null): string 
   return null;
 }
 
+export function applyPreviewMedia(root: ParentNode, baseDir: string | null): void {
+  for (const node of root.querySelectorAll("img[data-media-ref]")) {
+    if (!(node instanceof HTMLImageElement)) continue;
+    const ref = node.getAttribute("data-media-ref");
+    if (!ref) continue;
+    const src = resolveMediaSrc(ref, baseDir, true);
+    if (src) node.src = src;
+  }
+}
+
 export function renderMarkdownImage(alt: string, destination: string, baseDir: string | null): string {
   const { url, title } = splitMarkdownDestination(destination);
-  const src = resolveMediaSrc(url, baseDir);
-  if (!src) {
-    return `<span class="image-ref">${alt || escapeAttr(url)}</span>`;
-  }
-  const titleAttr = title ? ` title="${escapeAttr(title)}"` : "";
-  return `<img class="md-image" src="${escapeAttr(src)}" alt="${alt}"${titleAttr} loading="lazy">`;
+  const src = resolveMediaSrc(url, baseDir, false);
+  return previewImageHtml(alt, url, src, title);
 }
 
 export function rewriteHtmlMedia(html: string, baseDir: string | null): string {
   return html.replace(/<img\b([^>]*?)\bsrc=("[^"]*"|'[^']*')/gi, (full, attrs: string, quoted: string) => {
     const raw = quoted.slice(1, -1);
-    const resolved = resolveMediaSrc(raw, baseDir);
-    if (!resolved || resolved === raw) return full;
-    return `<img${attrs}src="${escapeAttr(resolved)}"`;
+    if (/^https?:\/\//i.test(raw) || /^data:image\//i.test(raw)) return full;
+    const resolved = resolveMediaSrc(raw, baseDir, false);
+    const embed = resolved && isEmbeddablePreviewSrc(resolved) ? resolved : "";
+    const ref = ` data-media-ref="${escapeAttr(raw)}"`;
+    return `<img${attrs}src="${escapeAttr(embed)}"${ref}`;
   });
 }
 

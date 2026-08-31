@@ -259,9 +259,11 @@ function renderQuote(block: Extract<MarkdownBlock, { type: "quote" }>, baseDir: 
 
 function renderInline(value: string, baseDir: string | null): string {
   let text = escapeHtml(value);
-  text = text.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_match, alt: string, destination: string) =>
-    renderMarkdownImage(alt, destination, baseDir)
-  );
+  const images: string[] = [];
+  text = text.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_match, alt: string, destination: string) => {
+    images.push(renderMarkdownImage(alt, destination, baseDir));
+    return `\0IMG${images.length - 1}\0`;
+  });
   text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, label: string, url: string) => {
     const safeUrl = String(url).trim();
     if (!/^(https?:|mailto:|#|\.{0,2}\/|[A-Za-z]:\\)/.test(safeUrl)) {
@@ -275,7 +277,7 @@ function renderInline(value: string, baseDir: string | null): string {
   text = text.replace(/\*([^*]+)\*/g, "<em>$1</em>");
   text = text.replace(/_([^_]+)_/g, "<em>$1</em>");
   text = text.replace(/~~([^~]+)~~/g, "<del>$1</del>");
-  // Math is left in place here; KaTeX auto-render typesets it in renderMarkdown.
+  text = text.replace(/\0IMG(\d+)\0/g, (_match, index: string) => images[Number(index)] ?? "");
   return text;
 }
 

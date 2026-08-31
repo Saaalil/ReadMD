@@ -1,12 +1,13 @@
 {
   "name": "readmd",
-  "version": "0.3.7",
+  "version": "0.3.8",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1",
+    "test": "node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/verify-fixes.ts",
     "tauri": "tauri",
     "desktop:dev": "tauri dev",
     "desktop:build": "node scripts/with-updater-key.mjs"

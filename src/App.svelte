@@ -6,7 +6,8 @@
   import { withExtension } from "./lib/download";
   import { previewHtmlDocument } from "./lib/html-preview";
   import { outlineFromParsed, parseMarkdown, renderMarkdown, typesetMath } from "./lib/markdown";
-  import { cacheMediaBytes, hydrateLocalImages, rewriteHtmlMedia } from "./lib/media";
+  import { applyPreviewMedia, cacheMediaBytes, hydrateLocalImages, rewriteHtmlMedia } from "./lib/media";
+  import { collectMatches } from "./lib/find";
   import { lineAtRoot, scrollRootToLine } from "./lib/scroll-sync";
   import {
     getLaunchArgs,
@@ -124,7 +125,7 @@ export function hello() {
   let replaceInput = $state<HTMLInputElement | undefined>(undefined);
   let paletteInput = $state<HTMLInputElement | undefined>(undefined);
   let editor = $state<{
-    revealRange: (from: number, to: number) => void;
+    revealRange: (from: number, to: number, focus?: boolean) => void;
     setContent: (text: string) => void;
     getContent: () => string;
     replaceRange: (from: number, to: number, text: string) => void;
@@ -206,20 +207,25 @@ export function hello() {
 
   $effect(() => {
     html;
+    mediaTick;
     if (!previewEl || kind === "html") return;
     const prose = previewEl.querySelector(".prose");
-    if (prose instanceof HTMLElement) typesetMath(prose);
+    if (!(prose instanceof HTMLElement)) return;
+    applyPreviewMedia(prose, docDir);
+    typesetMath(prose);
   });
 
   $effect(() => {
     if (kind !== "html" || !htmlFrame) return;
     previewEpoch;
+    mediaTick;
     const doc = htmlFrame.contentDocument;
     if (!doc) return;
     const top = doc.documentElement.scrollTop;
     doc.open();
     doc.write(html);
     doc.close();
+    applyPreviewMedia(doc, docDir);
     doc.documentElement.scrollTop = top;
   });
 
@@ -626,15 +632,19 @@ export function hello() {
   function replaceCurrent(): void {
     const match = findMatches[findIndex];
     if (!match) return;
+    const keep = activeFindField() ?? replaceInput;
     editor?.replaceRange(match.from, match.to, replaceQuery);
     void tick().then(() => {
       if (findMatches.length) jumpToMatch(Math.min(findIndex, findMatches.length - 1));
+      keep?.focus();
     });
   }
 
   function replaceAllMatches(): void {
     if (!findMatches.length) return;
+    const keep = activeFindField() ?? replaceInput;
     editor?.replaceRanges(findMatches, replaceQuery);
+    void tick().then(() => keep?.focus());
   }
 
   function lockSync(origin: "editor" | "preview"): void {
@@ -660,16 +670,48 @@ export function hello() {
     editor.scrollToLine(pos.line, pos.ratio);
   }
 
+  function activeFindField(): HTMLInputElement | null {
+    const active = document.activeElement;
+    if (active === findInput || active === replaceInput) return active as HTMLInputElement;
+    return null;
+  }
+
+  function isFindField(target: EventTarget | null): boolean {
+    return target === findInput || target === replaceInput;
+  }
+
+  function handleFindFieldKeydown(event: KeyboardEvent): void {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      findOpen = false;
+      findQuery = "";
+      return;
+    }
+    if (event.key === "Enter") {
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.target === replaceInput) replaceCurrent();
+      else jumpToMatch(findIndex + (event.shiftKey ? -1 : 1));
+      return;
+    }
+    if (!event.ctrlKey && !event.metaKey && !event.altKey) {
+      event.stopPropagation();
+    }
+  }
+
   function jumpToMatch(index: number): void {
     if (!findMatches.length) return;
     findIndex = (index + findMatches.length) % findMatches.length;
     const match = findMatches[findIndex];
     if (!match) return;
-    if (mode !== "reader") editor?.revealRange(match.from, match.to);
+    const keep = activeFindField();
+    if (mode !== "reader") editor?.revealRange(match.from, match.to, false);
     if (mode !== "editor") {
       const snippet = markdown.slice(match.from, match.to);
       flashPreview(snippet);
     }
+    if (keep) void tick().then(() => keep.focus());
   }
 
   function flashPreview(snippet: string): void {
@@ -698,24 +740,7 @@ export function hello() {
     if (!item || mode === "reader") return;
     const marker = `${"#".repeat(item.depth)} `;
     const index = markdown.indexOf(`${marker}${item.text}`);
-    if (index >= 0) editor?.revealRange(index, index + marker.length + item.text.length);
-  }
-
-  function collectMatches(source: string, query: string): Array<{ from: number; to: number }> {
-    const needle = query.trim();
-    if (needle.length < 1) return [];
-    const matches: Array<{ from: number; to: number }> = [];
-    const lower = source.toLowerCase();
-    const find = needle.toLowerCase();
-    let from = 0;
-    while (from < lower.length) {
-      const index = lower.indexOf(find, from);
-      if (index === -1) break;
-      matches.push({ from: index, to: index + needle.length });
-      from = index + Math.max(1, needle.length);
-      if (matches.length > 400) break;
-    }
-    return matches;
+    if (index >= 0) editor?.revealRange(index, index + marker.length + item.text.length, true);
   }
 
   function motionOk(): boolean {
@@ -741,6 +766,10 @@ export function hello() {
     const key = event.key.toLowerCase();
 
     if (welcomeOpen) return;
+
+    if (isFindField(event.target) && !event.ctrlKey && !event.metaKey && event.key !== "Escape") {
+      return;
+    }
 
     if (paletteOpen) {
       if (event.key === "Escape") {
@@ -854,7 +883,7 @@ export function hello() {
       toggleMenu("shortcuts");
       return;
     }
-    if (findOpen && event.key === "Enter") {
+    if (findOpen && event.key === "Enter" && isFindField(event.target)) {
       event.preventDefault();
       if (event.target === replaceInput) {
         replaceCurrent();
@@ -1135,25 +1164,34 @@ export function hello() {
         bind:this={findInput}
         bind:value={findQuery}
         class="find-query"
+        type="search"
+        autocomplete="off"
+        spellcheck="false"
         placeholder="Find in document"
         aria-label="Find in document"
+        onkeydown={handleFindFieldKeydown}
         oninput={() => {
           void tick().then(() => {
             if (findMatches.length) jumpToMatch(0);
             else findIndex = 0;
+            findInput?.focus();
           });
         }}
       />
       <span class="find-count">{findMatches.length ? findIndex + 1 : 0}/{findMatches.length}</span>
-      <button onclick={() => jumpToMatch(findIndex - 1)} aria-label="Previous match">Prev</button>
-      <button onclick={() => jumpToMatch(findIndex + 1)} aria-label="Next match">Next</button>
+      <button onclick={() => { jumpToMatch(findIndex - 1); findInput?.focus(); }} aria-label="Previous match">Prev</button>
+      <button onclick={() => { jumpToMatch(findIndex + 1); findInput?.focus(); }} aria-label="Next match">Next</button>
       <button class="icon-btn" onclick={() => { findOpen = false; findQuery = ""; }} aria-label="Close find">Esc</button>
       <input
         bind:this={replaceInput}
         bind:value={replaceQuery}
         class="replace-query"
+        type="text"
+        autocomplete="off"
+        spellcheck="false"
         placeholder="Replace with"
         aria-label="Replace with"
+        onkeydown={handleFindFieldKeydown}
       />
       <button onclick={replaceCurrent} disabled={!findMatches.length}>Replace</button>
       <button onclick={replaceAllMatches} disabled={!findMatches.length}>Replace all</button>

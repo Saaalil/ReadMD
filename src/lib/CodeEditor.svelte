@@ -3,7 +3,6 @@
   import { html as htmlLanguage } from "@codemirror/lang-html";
   import { markdown as markdownLanguage } from "@codemirror/lang-markdown";
   import { bracketMatching, defaultHighlightStyle, foldGutter, HighlightStyle, syntaxHighlighting } from "@codemirror/language";
-  import { searchKeymap } from "@codemirror/search";
   import { Compartment, EditorState } from "@codemirror/state";
   import {
     drawSelection,
@@ -121,16 +120,16 @@
     internalUpdate = false;
   }
 
-  export function revealRange(from: number, to: number): void {
+  export function revealRange(from: number, to: number, focus = false): void {
     if (!view) return;
     const size = view.state.doc.length;
     const start = Math.max(0, Math.min(from, size));
-    const end = Math.max(0, Math.min(to, size));
+    const end = Math.max(start, Math.min(to, size));
     view.dispatch({
       selection: { anchor: start, head: end },
       scrollIntoView: true
     });
-    view.focus();
+    if (focus) view.focus();
   }
 
   export function replaceRange(from: number, to: number, text: string): void {
@@ -202,7 +201,7 @@
           bracketMatching(),
           langComp.of(languageExtension(language)),
           EditorView.lineWrapping,
-          keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap, indentWithTab]),
+          keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
           themeComp.of(themeExtensions(appearance === "dark")),
           EditorView.updateListener.of((update) => {
             if (!update.docChanged || internalUpdate) return;
