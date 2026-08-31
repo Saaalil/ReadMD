@@ -17,6 +17,7 @@ export interface Prefs {
   lastOpenDir: string | null;
   lastSaveDir: string | null;
   lastExportDir: string | null;
+  onboarded: boolean;
 }
 
 const KEY = "readmd.prefs.v1";
@@ -31,7 +32,8 @@ const defaults: Prefs = {
   lastFile: null,
   lastOpenDir: null,
   lastSaveDir: null,
-  lastExportDir: null
+  lastExportDir: null,
+  onboarded: false
 };
 
 let systemListener: ((event: MediaQueryListEvent) => void) | null = null;
@@ -50,7 +52,8 @@ export function loadPrefs(): Prefs {
       lastFile: parsed.lastFile && isRecent(parsed.lastFile) ? parsed.lastFile : null,
       lastOpenDir: stringOrNull(parsed.lastOpenDir),
       lastSaveDir: stringOrNull(parsed.lastSaveDir),
-      lastExportDir: stringOrNull(parsed.lastExportDir)
+      lastExportDir: stringOrNull(parsed.lastExportDir),
+      onboarded: parsed.onboarded === true
     };
   } catch {
     return { ...defaults, recents: [] };
