@@ -1,4 +1,4 @@
-# ReadMD
+# ReadMD - Simple , small - just does the work Open any Md , txt files easily 
 
 Native desktop app for opening, editing, and exporting Markdown, HTML, and text files. Local-first — not a website. Windows and Linux.
 
