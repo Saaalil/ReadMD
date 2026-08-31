@@ -52,7 +52,7 @@ jobs:
           releaseBody: |
             Native Markdown editor for Windows and Linux. Open `.md`, `.txt`, and `.html` files locally, edit with a live preview, and export PDF, DOCX, or plain text. No account and no cloud.
 
-            ## 0.3.4
+            ## 0.3.5
 
             - **Paste images without base64.** Ctrl+V stores the file locally and inserts a short `img/a1b2c3d4.png` link. Saving copies those files into an `img` folder next to the Markdown file. Existing giant `data:image` blobs are rewritten the same way.
             - Dropped images use the same short links.

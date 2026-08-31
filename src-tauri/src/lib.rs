@@ -61,6 +61,11 @@ fn copy_file(from: String, to: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn read_bytes(path: String) -> Result<Vec<u8>, String> {
+    std::fs::read(&path).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn pasted_dir(app: tauri::AppHandle) -> Result<String, String> {
     let dir = app
         .path()
