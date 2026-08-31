@@ -127,7 +127,36 @@ button:disabled {
 }
 
 .shell:has(.findbar) {
-  grid-template-rows: 52px 40px 1fr 28px;
+  grid-template-rows: 52px auto 1fr 28px;
+}
+
+.shell:has(.update-bar) {
+  grid-template-rows: auto 52px 1fr 28px;
+}
+
+.shell:has(.update-bar):has(.findbar) {
+  grid-template-rows: auto 52px auto 1fr 28px;
+}
+
+.update-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 36px;
+  padding: 6px 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--ok) 40%, var(--border));
+  background: color-mix(in srgb, var(--ok) 12%, var(--bg-raised));
+  color: var(--text);
+  font-size: 13px;
+}
+
+.update-bar span {
+  flex: 1;
+  min-width: 0;
+}
+
+.update-bar .primary {
+  height: 28px;
 }
 
 .topbar {
@@ -324,16 +353,16 @@ button:disabled {
 
 .findbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  padding: 0 12px;
+  padding: 8px 12px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-raised);
 }
 
 .findbar input,
 .palette input {
-  width: 100%;
   height: 28px;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -341,6 +370,16 @@ button:disabled {
   color: var(--text);
   background: var(--bg);
   font: inherit;
+}
+
+.findbar input {
+  flex: 1 1 200px;
+  width: auto;
+  min-width: 160px;
+}
+
+.palette input {
+  width: 100%;
 }
 
 .find-count {
@@ -551,9 +590,22 @@ button:disabled {
   text-underline-offset: 3px;
 }
 
-.prose img {
+.prose img,
+.prose .md-image {
+  display: block;
   max-width: 100%;
+  height: auto;
+  margin: 0.85em 0;
   border-radius: 6px;
+}
+
+.image-ref {
+  display: inline-block;
+  padding: 0.1em 0.4em;
+  border: 1px dashed var(--border-strong);
+  border-radius: 4px;
+  color: var(--muted);
+  font-size: 0.9em;
 }
 
 .prose code {
@@ -734,6 +786,14 @@ button:disabled {
   text-overflow: ellipsis;
 }
 
+.status-update {
+  height: 22px;
+  padding: 0 8px;
+  border-color: var(--border-strong);
+  color: var(--text);
+  font-size: 12px;
+}
+
 .palette-backdrop {
   position: fixed;
   inset: 0;
@@ -878,8 +938,13 @@ button:disabled {
   }
 
   .shell,
-  .shell:has(.findbar) {
+  .shell:has(.findbar),
+  .shell:has(.update-bar) {
     grid-template-rows: auto auto 1fr 28px;
+  }
+
+  .shell:has(.update-bar):has(.findbar) {
+    grid-template-rows: auto auto auto 1fr 28px;
   }
 
   .workspace,

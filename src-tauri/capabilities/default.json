@@ -11,6 +11,8 @@
     "fs:allow-read-text-file",
     "fs:allow-write-text-file",
     "fs:allow-write-file",
-    "core:event:default"
+    "core:event:default",
+    "updater:default",
+    "process:default"
   ]
 }

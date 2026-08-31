@@ -1,16 +1,19 @@
 import "katex/dist/katex.min.css";
 import renderMathInElement from "katex/contrib/auto-render";
+import { renderMarkdownImage, rewriteHtmlMedia } from "./media";
+
+type Line = { startLine: number };
 
 export type MarkdownBlock =
-  | { type: "frontmatter"; lines: string[] }
-  | { type: "heading"; depth: number; text: string }
-  | { type: "paragraph"; lines: string[] }
-  | { type: "code"; language: string; lines: string[] }
-  | { type: "table"; rows: string[][]; aligns: Array<"left" | "center" | "right"> }
-  | { type: "list"; ordered: boolean; items: string[] }
-  | { type: "quote"; lines: string[] }
-  | { type: "html"; lines: string[] }
-  | { type: "rule" };
+  | (Line & { type: "frontmatter"; lines: string[] })
+  | (Line & { type: "heading"; depth: number; text: string })
+  | (Line & { type: "paragraph"; lines: string[] })
+  | (Line & { type: "code"; language: string; lines: string[] })
+  | (Line & { type: "table"; rows: string[][]; aligns: Array<"left" | "center" | "right"> })
+  | (Line & { type: "list"; ordered: boolean; items: string[] })
+  | (Line & { type: "quote"; lines: string[] })
+  | (Line & { type: "html"; lines: string[] })
+  | (Line & { type: "rule" });
 
 export interface ParsedMarkdown {
   blocks: MarkdownBlock[];
@@ -35,7 +38,7 @@ export function parseMarkdown(source: string): ParsedMarkdown {
   if (lines[0] === "---" || lines[0] === "+++" || lines[0] === "{") {
     const frontmatter = readFrontmatter(lines);
     if (frontmatter) {
-      blocks.push({ type: "frontmatter", lines: frontmatter.lines });
+      blocks.push({ type: "frontmatter", startLine: 1, lines: frontmatter.lines });
       index = frontmatter.nextIndex;
     }
   }
@@ -53,6 +56,7 @@ export function parseMarkdown(source: string): ParsedMarkdown {
       const result = readFence(lines, index, fence[1]);
       blocks.push({
         type: "code",
+        startLine: index + 1,
         language: (fence[2] ?? "").trim().split(/\s+/)[0] ?? "",
         lines: result.lines
       });
@@ -65,13 +69,13 @@ export function parseMarkdown(source: string): ParsedMarkdown {
 
     const heading = line.match(/^(#{1,6})\s+(.+?)\s*#*$/);
     if (heading) {
-      blocks.push({ type: "heading", depth: heading[1].length, text: heading[2].trim() });
+      blocks.push({ type: "heading", startLine: index + 1, depth: heading[1].length, text: heading[2].trim() });
       index += 1;
       continue;
     }
 
     if (/^ {0,3}(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
-      blocks.push({ type: "rule" });
+      blocks.push({ type: "rule", startLine: index + 1 });
       index += 1;
       continue;
     }
@@ -100,13 +104,13 @@ export function parseMarkdown(source: string): ParsedMarkdown {
 
     if (looksLikeHtml(line)) {
       const result = readHtml(lines, index);
-      blocks.push({ type: "html", lines: result.lines });
+      blocks.push({ type: "html", startLine: index + 1, lines: result.lines });
       index = result.nextIndex;
       continue;
     }
 
     const paragraph = readParagraph(lines, index);
-    blocks.push({ type: "paragraph", lines: paragraph.lines });
+    blocks.push({ type: "paragraph", startLine: index + 1, lines: paragraph.lines });
     index = paragraph.nextIndex;
   }
 
@@ -132,7 +136,7 @@ export function outlineFromParsed(parsed: ParsedMarkdown): OutlineItem[] {
   return items;
 }
 
-export function renderMarkdown(parsed: ParsedMarkdown): string {
+export function renderMarkdown(parsed: ParsedMarkdown, baseDir: string | null = null): string {
   const outline = outlineFromParsed(parsed);
   let headingIndex = 0;
   const body = parsed.blocks
@@ -141,9 +145,12 @@ export function renderMarkdown(parsed: ParsedMarkdown): string {
       if (block.type === "heading") {
         const item = outline[headingIndex] ?? { id: "section", depth: block.depth, text: block.text };
         headingIndex += 1;
-        return `<h${block.depth} id="${escapeHtml(item.id)}">${renderInline(block.text)}</h${block.depth}>`;
+        return markLine(
+          `<h${block.depth} id="${escapeHtml(item.id)}">${renderInline(block.text, baseDir)}</h${block.depth}>`,
+          block.startLine
+        );
       }
-      return renderBlock(block);
+      return markLine(renderBlock(block, baseDir), block.startLine);
     })
     .join("\n");
   const diagnostics = parsed.diagnostics.map((item) => `<li>${escapeHtml(item)}</li>`).join("");
@@ -172,22 +179,22 @@ export function renderMarkdown(parsed: ParsedMarkdown): string {
   return host.innerHTML;
 }
 
-function renderBlock(block: MarkdownBlock): string {
+function renderBlock(block: MarkdownBlock, baseDir: string | null): string {
   switch (block.type) {
     case "heading":
-      return `<h${block.depth}>${renderInline(block.text)}</h${block.depth}>`;
+      return `<h${block.depth}>${renderInline(block.text, baseDir)}</h${block.depth}>`;
     case "paragraph":
-      return `<p>${renderInline(block.lines.join(" "))}</p>`;
+      return `<p>${renderInline(block.lines.join(" "), baseDir)}</p>`;
     case "code":
       return renderCode(block);
     case "table":
-      return renderTable(block);
+      return renderTable(block, baseDir);
     case "list":
-      return renderList(block);
+      return renderList(block, baseDir);
     case "quote":
-      return renderQuote(block);
+      return renderQuote(block, baseDir);
     case "html":
-      return `<div class="raw-html">${block.lines.join("\n")}</div>`;
+      return `<div class="raw-html">${rewriteHtmlMedia(block.lines.join("\n"), baseDir)}</div>`;
     case "rule":
       return "<hr>";
     case "frontmatter":
@@ -205,58 +212,60 @@ function renderCode(block: Extract<MarkdownBlock, { type: "code" }>): string {
   return `<figure class="code-block"><figcaption class="code-toolbar"><span>${label}</span><button type="button" class="copy-code">Copy</button></figcaption><pre><code${language}>${content}</code></pre></figure>`;
 }
 
-function renderTable(block: Extract<MarkdownBlock, { type: "table" }>): string {
+function renderTable(block: Extract<MarkdownBlock, { type: "table" }>, baseDir: string | null): string {
   const [head = [], ...body] = block.rows;
   const headings = head
-    .map((cell, index) => `<th class="${block.aligns[index] ?? "left"}">${renderInline(cell)}</th>`)
+    .map((cell, index) => `<th class="${block.aligns[index] ?? "left"}">${renderInline(cell, baseDir)}</th>`)
     .join("");
   const rows = body
-    .map((row) => `<tr>${row.map((cell, index) => `<td class="${block.aligns[index] ?? "left"}">${renderInline(cell)}</td>`).join("")}</tr>`)
+    .map((row) => `<tr>${row.map((cell, index) => `<td class="${block.aligns[index] ?? "left"}">${renderInline(cell, baseDir)}</td>`).join("")}</tr>`)
     .join("");
 
   return `<div class="table-wrap"><table><thead><tr>${headings}</tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
-function renderList(block: Extract<MarkdownBlock, { type: "list" }>): string {
+function renderList(block: Extract<MarkdownBlock, { type: "list" }>, baseDir: string | null): string {
   const tag = block.ordered ? "ol" : "ul";
   if (block.ordered) {
-    const items = block.items.map((item) => `<li>${renderInline(item)}</li>`).join("");
+    const items = block.items.map((item) => `<li>${renderInline(item, baseDir)}</li>`).join("");
     return `<${tag}>${items}</${tag}>`;
   }
 
   const hasTasks = block.items.some((item) => /^\[[ xX]\]\s*/.test(item));
   if (!hasTasks) {
-    const items = block.items.map((item) => `<li>${renderInline(item)}</li>`).join("");
+    const items = block.items.map((item) => `<li>${renderInline(item, baseDir)}</li>`).join("");
     return `<${tag}>${items}</${tag}>`;
   }
 
   const items = block.items
     .map((item) => {
       const match = item.match(/^\[([ xX])\]\s*(.*)$/);
-      if (!match) return `<li>${renderInline(item)}</li>`;
+      if (!match) return `<li>${renderInline(item, baseDir)}</li>`;
       const checked = match[1].toLowerCase() === "x";
       const checkbox = `<input type="checkbox" class="task-checkbox" disabled ${checked ? "checked" : ""}>`;
-      const label = checked ? `<del>${renderInline(match[2] ?? "")}</del>` : renderInline(match[2] ?? "");
+      const label = checked ? `<del>${renderInline(match[2] ?? "", baseDir)}</del>` : renderInline(match[2] ?? "", baseDir);
       return `<li class="task-item">${checkbox}<span>${label}</span></li>`;
     })
     .join("");
   return `<${tag} class="task-list">${items}</${tag}>`;
 }
 
-function renderQuote(block: Extract<MarkdownBlock, { type: "quote" }>): string {
+function renderQuote(block: Extract<MarkdownBlock, { type: "quote" }>, baseDir: string | null): string {
   const first = block.lines[0] ?? "";
   const callout = first.match(calloutPattern);
   if (callout) {
     const title = callout[1].toUpperCase();
     const rest = [callout[2], ...block.lines.slice(1)].filter(Boolean).join(" ");
-    return `<aside class="callout ${title.toLowerCase()}"><strong>${title}</strong><p>${renderInline(rest)}</p></aside>`;
+    return `<aside class="callout ${title.toLowerCase()}"><strong>${title}</strong><p>${renderInline(rest, baseDir)}</p></aside>`;
   }
-  return `<blockquote>${block.lines.map((line) => `<p>${renderInline(line)}</p>`).join("")}</blockquote>`;
+  return `<blockquote>${block.lines.map((line) => `<p>${renderInline(line, baseDir)}</p>`).join("")}</blockquote>`;
 }
 
-function renderInline(value: string): string {
+function renderInline(value: string, baseDir: string | null): string {
   let text = escapeHtml(value);
-  text = text.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<span class="image-ref">$1</span>');
+  text = text.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_match, alt: string, destination: string) =>
+    renderMarkdownImage(alt, destination, baseDir)
+  );
   text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, label: string, url: string) => {
     const safeUrl = String(url).trim();
     if (!/^(https?:|mailto:|#|\.{0,2}\/|[A-Za-z]:\\)/.test(safeUrl)) {
@@ -334,7 +343,7 @@ function readTable(lines: string[], start: number): { table: Extract<MarkdownBlo
     index += 1;
   }
 
-  return { table: { type: "table", rows, aligns }, nextIndex: index };
+  return { table: { type: "table", startLine: start + 1, rows, aligns }, nextIndex: index };
 }
 
 function splitTableRow(line: string): string[] {
@@ -374,7 +383,7 @@ function readList(lines: string[], start: number, ordered: boolean): { list: Ext
     index += 1;
   }
 
-  return { list: { type: "list", ordered, items }, nextIndex: index };
+  return { list: { type: "list", startLine: start + 1, ordered, items }, nextIndex: index };
 }
 
 function readQuote(lines: string[], start: number): { quote: Extract<MarkdownBlock, { type: "quote" }>; nextIndex: number } {
@@ -386,7 +395,7 @@ function readQuote(lines: string[], start: number): { quote: Extract<MarkdownBlo
     index += 1;
   }
 
-  return { quote: { type: "quote", lines: body }, nextIndex: index };
+  return { quote: { type: "quote", startLine: start + 1, lines: body }, nextIndex: index };
 }
 
 function looksLikeHtml(line: string): boolean {
@@ -444,4 +453,8 @@ function slugify(text: string): string {
     .replace(/[^\p{L}\p{N}]+/gu, "-")
     .replace(/^-+|-+$/g, "");
   return slug || "section";
+}
+
+function markLine(html: string, line: number): string {
+  return html.replace(/^<([a-zA-Z0-9-]+)/, `<$1 data-line="${line}"`);
 }

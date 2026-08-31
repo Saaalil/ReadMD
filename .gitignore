@@ -27,3 +27,8 @@ Thumbs.db
 # installers belong on GitHub Releases, not in git
 release/*.exe
 release/*.msi
+
+# updater signing key — never commit
+src-tauri/updater.key
+src-tauri/updater.key.pub
+src-tauri/*.key

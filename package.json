@@ -1,6 +1,6 @@
 {
   "name": "readmd",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,7 +9,7 @@
     "preview": "vite preview --host 127.0.0.1",
     "tauri": "tauri",
     "desktop:dev": "tauri dev",
-    "desktop:build": "tauri build"
+    "desktop:build": "node scripts/with-updater-key.mjs"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.0",
@@ -23,6 +23,8 @@
     "@tauri-apps/api": "^2.5.0",
     "@tauri-apps/plugin-dialog": "^2.2.2",
     "@tauri-apps/plugin-fs": "^2.4.0",
+    "@tauri-apps/plugin-process": "^2.3.1",
+    "@tauri-apps/plugin-updater": "^2.11.0",
     "katex": "^0.18.4",
     "svelte": "^5.34.9",
     "typescript": "^5.8.3",

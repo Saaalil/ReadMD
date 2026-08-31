@@ -5,6 +5,7 @@
   import { withExtension } from "./lib/download";
   import { previewHtmlDocument } from "./lib/html-preview";
   import { outlineFromParsed, parseMarkdown, renderMarkdown } from "./lib/markdown";
+  import { lineAtRoot, scrollRootToLine } from "./lib/scroll-sync";
   import {
     getLaunchArgs,
     isTauriRuntime,
@@ -29,6 +30,7 @@
     type ThemePref,
     type ViewMode
   } from "./lib/prefs";
+  import { checkForAppUpdate, type UpdateOffer } from "./lib/updater";
   import { onDestroy, onMount, tick } from "svelte";
 
   type Mode = ViewMode;
@@ -44,6 +46,10 @@ Open a Markdown file, edit it, and export it cleanly.
 - [x] Render Markdown faithfully
 - [x] Export PDF, DOCX, and clean TXT
 - [x] Jump headings, find text, and reopen recent files
+
+Images render from https URLs, and from files next to a saved Markdown document:
+
+![Markdown](https://cdn.jsdelivr.net/gh/devicons/devicon/icons/markdown/markdown-original.svg)
 
 Inline math works too: $e^{i\\pi} + 1 = 0$
 
@@ -75,7 +81,11 @@ export function hello() {
   let lastOpenDir = $state(initial.lastOpenDir);
   let lastSaveDir = $state(initial.lastSaveDir);
   let lastExportDir = $state(initial.lastExportDir);
-  let notice = $state<{ kind: "error" | "ok"; text: string } | null>(null);
+  let notice = $state<{
+    kind: "error" | "ok";
+    text: string;
+    action?: { label: string; run: () => void };
+  } | null>(null);
   let toastLeaving = $state(false);
   let errorTimer: ReturnType<typeof setTimeout> | null = null;
   let menu = $state<MenuId>(null);
@@ -84,22 +94,35 @@ export function hello() {
   let paletteIndex = $state(0);
   let findOpen = $state(false);
   let findQuery = $state("");
+  let replaceQuery = $state("");
   let findIndex = $state(0);
   let dragging = $state(false);
   let dragDepth = 0;
   let activeHeading = $state<string | null>(null);
   let previewEl = $state<HTMLElement | undefined>(undefined);
   let findInput = $state<HTMLInputElement | undefined>(undefined);
+  let replaceInput = $state<HTMLInputElement | undefined>(undefined);
   let paletteInput = $state<HTMLInputElement | undefined>(undefined);
   let editor = $state<{
     revealRange: (from: number, to: number) => void;
     setContent: (text: string) => void;
     getContent: () => string;
+    replaceRange: (from: number, to: number, text: string) => void;
+    replaceRanges: (ranges: Array<{ from: number; to: number }>, text: string) => void;
+    getScrollLine: () => { line: number; ratio: number };
+    scrollToLine: (line: number, ratio: number) => void;
   } | undefined>(undefined);
   let htmlFrame = $state<HTMLIFrameElement | undefined>(undefined);
   let unlistenClose: (() => void) | null = null;
   let unlistenDrop: (() => void) | null = null;
   let previewEpoch = $state(0);
+  let saving = $state(false);
+  let autoSaveTimer: ReturnType<typeof setTimeout> | null = null;
+  let syncLock: "editor" | "preview" | null = null;
+  let syncUnlock: ReturnType<typeof setTimeout> | null = null;
+  let updateOffer = $state<UpdateOffer | null>(null);
+  let updateBusy = $state(false);
+  let updatePercent = $state<number | null>(null);
 
   let appearance = $state<"dark" | "light">(resolvedTheme(initial.theme));
   let previewSource = $state(sample);
@@ -119,7 +142,7 @@ export function hello() {
       ? renderPlainText(previewSource)
       : kind === "html"
         ? previewHtmlDocument(previewSource)
-        : renderMarkdown(parsed)
+        : renderMarkdown(parsed, filePath ? dirFromPath(filePath) : null)
   );
   let outline = $derived(kind === "markdown" ? outlineFromParsed(parsed) : []);
   let title = $derived(fileName.replace(/\.[^.]+$/, "") || "Untitled");
@@ -182,10 +205,6 @@ export function hello() {
   });
 
   $effect(() => {
-    if (findOpen) void tick().then(() => findInput?.focus());
-  });
-
-  $effect(() => {
     if (paletteOpen) {
       paletteIndex = 0;
       void tick().then(() => paletteInput?.focus());
@@ -212,6 +231,7 @@ export function hello() {
     previewSource = file.text;
     dirty = false;
     if (file.path) rememberDestination(file.path, file.name, "open");
+    clearAutoSave();
     void tick().then(() => editor?.setContent(file.text));
   }
 
@@ -232,6 +252,8 @@ export function hello() {
     unlistenFileOpened?.();
     unlistenClose?.();
     unlistenDrop?.();
+    if (autoSaveTimer) clearTimeout(autoSaveTimer);
+    if (syncUnlock) clearTimeout(syncUnlock);
   });
 
   onMount(() => {
@@ -244,6 +266,7 @@ export function hello() {
       refreshPreview();
     };
     window.addEventListener("keydown", blockReload, true);
+    window.setTimeout(() => void offerUpdate(), 2500);
     return () => window.removeEventListener("keydown", blockReload, true);
   });
 
@@ -310,41 +333,56 @@ export function hello() {
     markdown = "# Untitled\n\n";
     previewSource = markdown;
     dirty = false;
+    clearAutoSave();
     void tick().then(() => editor?.setContent(markdown));
   }
 
   async function saveDocument(): Promise<void> {
     closeOverlays();
-    try {
-      const source = currentSource();
-      markdown = source;
-      const next = await saveFile(filePath, fileName, source, lastSaveDir ?? lastOpenDir);
-      if (!next) return;
-      filePath = next;
-      fileName = displayNameFromPath(next);
-      rememberDestination(next, fileName, "save");
-      dirty = false;
-      showNotice("ok", "Saved.");
-    } catch (caught) {
-      showNotice("error", caught instanceof Error ? caught.message : "Unable to save file.");
-    }
+    await persist({ quiet: false, saveAs: false });
   }
 
   async function saveDocumentAs(): Promise<void> {
     closeOverlays();
+    await persist({ quiet: false, saveAs: true });
+  }
+
+  async function persist(options: { quiet: boolean; saveAs: boolean }): Promise<void> {
+    if (saving) return;
+    clearAutoSave();
+    if (options.quiet && (!filePath || options.saveAs)) return;
+    saving = true;
     try {
       const source = currentSource();
       markdown = source;
-      const next = await saveFile(null, fileName, source, lastSaveDir ?? lastOpenDir);
+      const next = await saveFile(options.saveAs ? null : filePath, fileName, source, lastSaveDir ?? lastOpenDir);
       if (!next) return;
       filePath = next;
       fileName = displayNameFromPath(next);
       rememberDestination(next, fileName, "save");
-      dirty = false;
-      showNotice("ok", "Saved.");
+      if (currentSource() === source) dirty = false;
+      else scheduleAutoSave();
+      if (!options.quiet) showNotice("ok", "Saved.");
     } catch (caught) {
       showNotice("error", caught instanceof Error ? caught.message : "Unable to save file.");
+    } finally {
+      saving = false;
     }
+  }
+
+  function clearAutoSave(): void {
+    if (autoSaveTimer) {
+      clearTimeout(autoSaveTimer);
+      autoSaveTimer = null;
+    }
+  }
+
+  function scheduleAutoSave(): void {
+    clearAutoSave();
+    if (!filePath) return;
+    autoSaveTimer = setTimeout(() => {
+      void persist({ quiet: true, saveAs: false });
+    }, 1800);
   }
 
   async function exportTxt(): Promise<void> {
@@ -402,9 +440,13 @@ export function hello() {
     }
   }
 
-  function showNotice(kind: "error" | "ok", text: string): void {
+  function showNotice(
+    kind: "error" | "ok",
+    text: string,
+    action?: { label: string; run: () => void }
+  ): void {
     toastLeaving = false;
-    notice = { kind, text };
+    notice = { kind, text, action };
     if (errorTimer) clearTimeout(errorTimer);
     errorTimer = setTimeout(dismissNotice, 2800);
   }
@@ -418,10 +460,34 @@ export function hello() {
     }, 180);
   }
 
+  async function offerUpdate(manual = false): Promise<void> {
+    const offer = await checkForAppUpdate();
+    if (!offer) {
+      if (manual) showNotice("ok", "You're on the latest version.");
+      return;
+    }
+    updateOffer = offer;
+  }
+
+  async function installAvailableUpdate(): Promise<void> {
+    if (!updateOffer || updateBusy) return;
+    updateBusy = true;
+    updatePercent = updateOffer.canInstall ? 0 : null;
+    try {
+      await updateOffer.install((percent) => {
+        updatePercent = percent;
+      });
+    } catch (caught) {
+      updateBusy = false;
+      showNotice("error", caught instanceof Error ? caught.message : "Update failed.");
+    }
+  }
+
   function handleEditorChange(value: string): void {
     markdown = value;
     previewSource = value;
     dirty = true;
+    scheduleAutoSave();
   }
 
   function closeOverlays(): void {
@@ -443,10 +509,48 @@ export function hello() {
     paletteIndex = 0;
   }
 
-  function openFind(): void {
+  function openFind(focusReplace = false): void {
     paletteOpen = false;
     menu = null;
     findOpen = true;
+    void tick().then(() => (focusReplace ? replaceInput : findInput)?.focus());
+  }
+
+  function replaceCurrent(): void {
+    const match = findMatches[findIndex];
+    if (!match) return;
+    editor?.replaceRange(match.from, match.to, replaceQuery);
+    void tick().then(() => {
+      if (findMatches.length) jumpToMatch(Math.min(findIndex, findMatches.length - 1));
+    });
+  }
+
+  function replaceAllMatches(): void {
+    if (!findMatches.length) return;
+    editor?.replaceRanges(findMatches, replaceQuery);
+  }
+
+  function lockSync(origin: "editor" | "preview"): void {
+    syncLock = origin;
+    if (syncUnlock) clearTimeout(syncUnlock);
+    syncUnlock = setTimeout(() => {
+      syncLock = null;
+    }, 140);
+  }
+
+  function syncPreviewFromEditor(): void {
+    if (mode !== "split" || kind === "html" || !previewEl || !editor) return;
+    if (syncLock === "preview") return;
+    lockSync("editor");
+    scrollRootToLine(previewEl, editor.getScrollLine(), 40);
+  }
+
+  function syncEditorFromPreview(): void {
+    if (mode !== "split" || kind === "html" || !previewEl || !editor) return;
+    if (syncLock === "editor") return;
+    lockSync("preview");
+    const pos = lineAtRoot(previewEl, 40);
+    editor.scrollToLine(pos.line, pos.ratio);
   }
 
   function jumpToMatch(index: number): void {
@@ -583,7 +687,12 @@ export function hello() {
     }
     if (event.ctrlKey && key === "f") {
       event.preventDefault();
-      openFind();
+      openFind(false);
+      return;
+    }
+    if (event.ctrlKey && key === "h") {
+      event.preventDefault();
+      openFind(true);
       return;
     }
     if (event.ctrlKey && key === "b") {
@@ -638,6 +747,10 @@ export function hello() {
     }
     if (findOpen && event.key === "Enter") {
       event.preventDefault();
+      if (event.target === replaceInput) {
+        replaceCurrent();
+        return;
+      }
       jumpToMatch(findIndex + (event.shiftKey ? -1 : 1));
       return;
     }
@@ -685,7 +798,9 @@ export function hello() {
     { id: "zoom-in", label: "Zoom in", hint: "Ctrl+=", run: () => { closeOverlays(); zoom = clampZoom(zoom + 10); } },
     { id: "zoom-out", label: "Zoom out", hint: "Ctrl+-", run: () => { closeOverlays(); zoom = clampZoom(zoom - 10); } },
     { id: "refresh", label: "Refresh preview", hint: "Ctrl+R", run: () => { closeOverlays(); refreshPreview(); } },
-    { id: "find", label: "Find in document", hint: "Ctrl+F", run: openFind },
+    { id: "find", label: "Find in document", hint: "Ctrl+F", run: () => openFind(false) },
+    { id: "replace", label: "Find and replace", hint: "Ctrl+H", run: () => openFind(true) },
+    { id: "check-updates", label: "Check for updates", hint: "", run: () => { closeOverlays(); void offerUpdate(true); } },
     { id: "pdf", label: "Export PDF", hint: "Ctrl+P", run: exportPdf },
     { id: "docx", label: "Export DOCX", hint: "", run: () => void exportDocx() },
     { id: "txt", label: "Export TXT", hint: "", run: () => void exportTxt() },
@@ -719,6 +834,23 @@ export function hello() {
   ondragleave={handleDragLeave}
 >
   <div class="shell">
+  {#if updateOffer}
+    <div class="update-bar" role="status">
+      <span>
+        {#if updateBusy && updateOffer.canInstall}
+          {updatePercent == null ? "Downloading update…" : `Downloading update… ${updatePercent}%`}
+        {:else}
+          ReadMD {updateOffer.version} is available.
+        {/if}
+      </span>
+      <button class="primary" disabled={updateBusy} onclick={() => void installAvailableUpdate()}>
+        {updateBusy ? "Updating" : updateOffer.installLabel}
+      </button>
+      {#if !updateBusy}
+        <button class="icon-btn" onclick={() => (updateOffer = null)} aria-label="Dismiss update">Later</button>
+      {/if}
+    </div>
+  {/if}
   <header class="topbar">
     <div class="identity">
       <img class="brand-mark" src="/icon.png" width="22" height="22" alt="" />
@@ -769,7 +901,7 @@ export function hello() {
           </div>
         {/if}
       </div>
-      <button class="icon-btn" onclick={openFind} title="Find (Ctrl+F)" aria-label="Find in document">
+      <button class="icon-btn" onclick={() => openFind(false)} title="Find (Ctrl+F)" aria-label="Find in document">
         <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.5" /><path d="M10.5 10.5 14 14" /></svg>
       </button>
       <button class="icon-btn" onclick={cycleTheme} title="Theme: {themePref}" aria-label="Cycle theme">
@@ -786,6 +918,7 @@ export function hello() {
       <input
         bind:this={findInput}
         bind:value={findQuery}
+        class="find-query"
         placeholder="Find in document"
         aria-label="Find in document"
         oninput={() => {
@@ -799,6 +932,15 @@ export function hello() {
       <button onclick={() => jumpToMatch(findIndex - 1)} aria-label="Previous match">Prev</button>
       <button onclick={() => jumpToMatch(findIndex + 1)} aria-label="Next match">Next</button>
       <button class="icon-btn" onclick={() => { findOpen = false; findQuery = ""; }} aria-label="Close find">Esc</button>
+      <input
+        bind:this={replaceInput}
+        bind:value={replaceQuery}
+        class="replace-query"
+        placeholder="Replace with"
+        aria-label="Replace with"
+      />
+      <button onclick={replaceCurrent} disabled={!findMatches.length}>Replace</button>
+      <button onclick={replaceAllMatches} disabled={!findMatches.length}>Replace all</button>
     </div>
   {/if}
 
@@ -824,10 +966,10 @@ export function hello() {
     {/if}
 
     <section class="editor-pane" aria-label="Document editor">
-        <CodeEditor bind:this={editor} value={markdown} appearance={appearance} language={kind} onChange={handleEditorChange} />
+        <CodeEditor bind:this={editor} value={markdown} appearance={appearance} language={kind} onChange={handleEditorChange} onScroll={syncPreviewFromEditor} />
       </section>
 
-      <article class="preview-pane" bind:this={previewEl} aria-label="Rendered preview">
+      <article class="preview-pane" bind:this={previewEl} aria-label="Rendered preview" onscroll={syncEditorFromPreview}>
         <div class="document-meta">
           <h1>{title}</h1>
           <span>{words} words</span>
@@ -845,7 +987,7 @@ export function hello() {
   </section>
 
   <footer class="statusbar">
-    <span>{dirty ? "Unsaved" : "Saved"}</span>
+    <span>{saving ? "Saving…" : dirty ? "Unsaved" : filePath ? "Saved" : "Draft"}</span>
     <span>{words} words</span>
     <span>{chars} chars</span>
     <span>{lines} lines</span>
@@ -853,12 +995,18 @@ export function hello() {
     <span>{mode}</span>
     <span>{zoom}%</span>
     <span>{appearance}</span>
+    {#if updateOffer && !updateBusy}
+      <button class="status-update" onclick={() => void installAvailableUpdate()}>Update {updateOffer.version}</button>
+    {/if}
   </footer>
   </div>
 
   {#if notice}
     <div class="toast" class:ok={notice.kind === "ok"} class:leaving={toastLeaving} role="status">
       <span>{notice.text}</span>
+      {#if notice.action}
+        <button class="toast-dismiss" onclick={() => notice?.action?.run()}>{notice.action.label}</button>
+      {/if}
       <button class="toast-dismiss" onclick={dismissNotice} aria-label="Dismiss">Dismiss</button>
     </div>
   {/if}
@@ -891,6 +1039,7 @@ export function hello() {
           <div><dt>Command palette</dt><dd>Ctrl+K</dd></div>
           <div><dt>Refresh preview</dt><dd>Ctrl+R</dd></div>
           <div><dt>Find</dt><dd>Ctrl+F</dd></div>
+          <div><dt>Replace</dt><dd>Ctrl+H</dd></div>
           <div><dt>Outline</dt><dd>Ctrl+B</dd></div>
           <div><dt>New / Open / Save</dt><dd>Ctrl+N / O / S</dd></div>
           <div><dt>Save as</dt><dd>Ctrl+Shift+S</dd></div>

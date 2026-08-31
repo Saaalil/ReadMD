@@ -9,8 +9,19 @@ permissions:
   contents: write
 
 jobs:
-  windows:
-    runs-on: windows-latest
+  publish:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            args: --bundles nsis,msi
+            binary: true
+          - platform: ubuntu-22.04
+            args: --bundles appimage,deb
+            binary: false
+
+    runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
 
@@ -21,16 +32,30 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
       - name: Install frontend
         run: npm ci
 
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: ReadMD ${{ github.ref_name }}
-          releaseBody: Windows installer (NSIS), MSI, and portable executable.
+          releaseBody: |
+            Windows: NSIS setup (recommended) and MSI.
+            Linux: AppImage (portable) and .deb.
+
+            Installed copies check this release for updates and can install in-app.
           releaseDraft: false
           prerelease: false
-          args: --bundles nsis,msi
+          includeUpdaterJson: true
+          updaterJsonPreferNsis: true
+          uploadPlainBinary: ${{ matrix.binary }}
+          args: ${{ matrix.args }}

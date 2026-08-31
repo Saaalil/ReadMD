@@ -23,9 +23,10 @@
     appearance: "dark" | "light";
     language: "markdown" | "html" | "text";
     onChange: (value: string) => void;
+    onScroll?: () => void;
   }
 
-  let { value, appearance, language, onChange }: Props = $props();
+  let { value, appearance, language, onChange, onScroll }: Props = $props();
   let host: HTMLDivElement;
   let view: EditorView | null = null;
   let internalUpdate = false;
@@ -132,6 +133,47 @@
     view.focus();
   }
 
+  export function replaceRange(from: number, to: number, text: string): void {
+    if (!view) return;
+    const size = view.state.doc.length;
+    const start = Math.max(0, Math.min(from, size));
+    const end = Math.max(start, Math.min(to, size));
+    view.dispatch({
+      changes: { from: start, to: end, insert: text },
+      selection: { anchor: start + text.length }
+    });
+  }
+
+  export function replaceRanges(ranges: Array<{ from: number; to: number }>, text: string): void {
+    if (!view || ranges.length === 0) return;
+    const changes = [...ranges]
+      .sort((a, b) => b.from - a.from)
+      .map((range) => ({ from: range.from, to: range.to, insert: text }));
+    view.dispatch({ changes });
+  }
+
+  export function getScrollLine(): { line: number; ratio: number } {
+    if (!view) return { line: 1, ratio: 0 };
+    const scroller = view.scrollDOM;
+    const y = scroller.scrollTop;
+    const block = view.lineBlockAtHeight(y);
+    const line = view.state.doc.lineAt(block.from).number;
+    const height = Math.max(1, block.bottom - block.top);
+    return { line, ratio: (y - block.top) / height };
+  }
+
+  export function scrollToLine(line: number, ratio: number): void {
+    if (!view) return;
+    const target = Math.max(1, Math.min(line, view.state.doc.lines));
+    const pos = view.state.doc.line(target).from;
+    const block = view.lineBlockAt(pos);
+    view.scrollDOM.scrollTop = block.top + Math.max(0, block.bottom - block.top) * ratio;
+  }
+
+  function handleScroll(): void {
+    onScroll?.();
+  }
+
   onMount(() => {
     view = new EditorView({
       parent: host,
@@ -158,6 +200,7 @@
         ]
       })
     });
+    view.scrollDOM.addEventListener("scroll", handleScroll, { passive: true });
   });
 
   $effect(() => {
@@ -173,6 +216,7 @@
   });
 
   onDestroy(() => {
+    view?.scrollDOM.removeEventListener("scroll", handleScroll);
     view?.destroy();
   });
 </script>
