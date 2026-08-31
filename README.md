@@ -25,12 +25,12 @@ Make the AppImage executable: `chmod +x readmd_*.AppImage`, then run it.
 
 Installed copies check GitHub Releases for newer versions and show an **Update now** bar. Command palette → **Check for updates**.
 
-Tag a version (`v0.3.3`) to cut a new release. GitHub Actions builds Windows and Linux installers, signs updater artifacts, and publishes `latest.json`.
+Tag a version (`v0.3.4`) to cut a new release. GitHub Actions builds Windows and Linux installers, signs updater artifacts, and publishes `latest.json`.
 
 ## Features
 
 - Reader, split, and editor views with live preview
-- Images from https URLs, files next to the saved document, and paste/drop (GitHub-style)
+- Images from https URLs, paste/drop with short `img/` links (not base64), and files next to the document
 - Split-view scroll sync between editor and preview
 - Outline, command palette (`Ctrl+K`), find and replace (`Ctrl+F` / `Ctrl+H`)
 - Idle auto-save for files already on disk

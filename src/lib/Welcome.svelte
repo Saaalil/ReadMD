@@ -44,7 +44,7 @@
       lead: "Open from the picker, recents, drag-and-drop, or double-click a file in Explorer.",
       points: [
         { label: "Auto-save", detail: "If the file is already on disk, it saves after you pause." },
-        { label: "Images", detail: "Paste or drop like GitHub. Saved next to the .md." },
+        { label: "Images", detail: "Paste or drop. Stored as a short img/ link, not base64." },
         { label: "Last folders", detail: "Open, save, and export start where you left off." }
       ]
     },

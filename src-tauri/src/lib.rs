@@ -24,7 +24,7 @@ pub fn run() {
                 let _ = window.set_focus();
             }
         }))
-        .invoke_handler(tauri::generate_handler![launch_args, write_bytes, copy_file, read_bytes])
+        .invoke_handler(tauri::generate_handler![launch_args, write_bytes, copy_file, read_bytes, pasted_dir])
         .setup(|app| {
             // File opened via double-click / "Open with" at first launch.
             if let Some(path) = std::env::args().skip(1).find(|arg| !arg.starts_with('-')) {
@@ -61,6 +61,12 @@ fn copy_file(from: String, to: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn read_bytes(path: String) -> Result<Vec<u8>, String> {
-    std::fs::read(&path).map_err(|error| error.to_string())
+fn pasted_dir(app: tauri::AppHandle) -> Result<String, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?
+        .join("pasted");
+    std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+    Ok(dir.to_string_lossy().into_owned())
 }

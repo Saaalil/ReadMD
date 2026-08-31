@@ -1,7 +1,7 @@
 <script lang="ts">
   import CodeEditor from "./lib/CodeEditor.svelte";
   import Welcome from "./lib/Welcome.svelte";
-  import { dirFromPath, displayNameFromPath, documentKindFromName, joinPath, kindLabel } from "./lib/document-kind";
+  import { dirFromPath, displayNameFromPath, documentKindFromName, kindLabel } from "./lib/document-kind";
   import { markdownToDocx } from "./lib/docx";
   import { withExtension } from "./lib/download";
   import { previewHtmlDocument } from "./lib/html-preview";
@@ -16,11 +16,9 @@
     openFileAtPath,
     openMarkdownFile,
     askDiscardChanges,
-    copyDiskFile,
+    pastedStoreDir,
     saveFile,
     setWindowTitle,
-    writeBytes,
-    readBytes,
     type OpenedFile
   } from "./lib/native";
   import { renderPlainText } from "./lib/plain-render";
@@ -37,16 +35,15 @@
   } from "./lib/prefs";
   import { checkForAppUpdate, type UpdateOffer } from "./lib/updater";
   import {
-    assetsFolderFor,
-    bytesToDataUrl,
     extensionForImage,
     extensionFromPath,
     htmlImage,
     imageFileFromClipboard,
     isImagePath,
     markdownImage,
-    pastedImageName,
-    relativeMarkdownPath
+    materializeEmbeddedImages,
+    storePastedFile,
+    storePastedImage
   } from "./lib/paste-image";
   import { onDestroy, onMount, tick } from "svelte";
 
@@ -253,7 +250,10 @@ export function hello() {
     dirty = false;
     if (file.path) rememberDestination(file.path, file.name, "open");
     clearAutoSave();
-    void tick().then(() => editor?.setContent(file.text));
+    void tick().then(async () => {
+      editor?.setContent(file.text);
+      await collapseEmbeddedImages();
+    });
   }
 
   function currentSource(): string {
@@ -291,12 +291,19 @@ export function hello() {
       const target = event.target;
       if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return;
       const file = imageFileFromClipboard(event);
-      if (!file) return;
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      void insertImageFile(file);
+      if (file) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        void insertImageFile(file);
+        return;
+      }
+      const text = event.clipboardData?.getData("text/plain") ?? "";
+      if (text.includes("data:image")) {
+        window.setTimeout(() => void collapseEmbeddedImages(), 40);
+      }
     };
     window.addEventListener("paste", onPaste, true);
+    void pastedStoreDir().then(() => collapseEmbeddedImages());
     window.setTimeout(() => {
       if (welcomeOpen) return;
       void offerUpdate();
@@ -308,6 +315,7 @@ export function hello() {
   });
 
   if (isTauriRuntime()) {
+    void pastedStoreDir();
     unlistenFileOpened = onFileOpened(loadDocument);
     unlistenDrop = onNativeDrop((paths) => {
       dragging = false;
@@ -411,8 +419,14 @@ export function hello() {
       filePath = next;
       fileName = displayNameFromPath(next);
       rememberDestination(next, fileName, "save");
-      if (currentSource() === source) dirty = false;
-      else scheduleAutoSave();
+      const rewritten = await materializeEmbeddedImages(source, next);
+      if (rewritten !== source) {
+        await saveFile(next, fileName, rewritten, lastSaveDir ?? lastOpenDir);
+        markdown = rewritten;
+        previewSource = rewritten;
+        editor?.setContent(rewritten);
+      }
+      dirty = false;
       if (!options.quiet) showNotice("ok", "Saved.");
     } catch (caught) {
       showNotice("error", caught instanceof Error ? caught.message : "Unable to save file.");
@@ -862,18 +876,6 @@ export function hello() {
     return files;
   }
 
-  function assetDestination(ext: string): { abs: string; rel: string } | null {
-    if (!filePath || !isTauriRuntime()) return null;
-    const folder = assetsFolderFor(filePath);
-    const docDir = dirFromPath(filePath);
-    if (!folder || !docDir) return null;
-    const abs = joinPath(folder, pastedImageName(ext));
-    return {
-      abs,
-      rel: relativeMarkdownPath(docDir, abs)
-    };
-  }
-
   function imageSnippet(alt: string, src: string): string {
     return kind === "html" ? htmlImage(alt, src) : markdownImage(alt, src);
   }
@@ -890,16 +892,26 @@ export function hello() {
     scheduleAutoSave();
   }
 
-  async function insertImageBytes(bytes: Uint8Array, ext: string, mime: string, alt: string): Promise<void> {
+  async function collapseEmbeddedImages(): Promise<void> {
+    const source = currentSource();
+    if (!source.includes("data:image")) return;
     try {
-      const dest = assetDestination(ext);
-      if (dest) {
-        await writeBytes(dest.abs, bytes);
-        insertImageMarkup(alt, dest.rel);
-        return;
-      }
-      insertImageMarkup(alt, bytesToDataUrl(bytes, mime || `image/${ext}`));
-      showNotice("ok", "Image pasted. Save the file to store it next to the document.");
+      const next = await materializeEmbeddedImages(source, filePath);
+      if (next === source) return;
+      markdown = next;
+      previewSource = next;
+      editor?.setContent(next);
+      dirty = true;
+      scheduleAutoSave();
+    } catch (caught) {
+      showNotice("error", caught instanceof Error ? caught.message : "Unable to store pasted image.");
+    }
+  }
+
+  async function insertImageBytes(bytes: Uint8Array, ext: string, _mime: string, alt: string): Promise<void> {
+    try {
+      const src = await storePastedImage(bytes, ext, filePath);
+      insertImageMarkup(alt, src);
     } catch (caught) {
       showNotice("error", caught instanceof Error ? caught.message : "Unable to paste image.");
     }
@@ -922,15 +934,8 @@ export function hello() {
       try {
         const ext = extensionFromPath(path);
         const alt = displayNameFromPath(path).replace(/\.[^.]+$/, "") || "image";
-        const dest = assetDestination(ext);
-        if (dest) {
-          await copyDiskFile(path, dest.abs);
-          insertImageMarkup(alt, dest.rel);
-          continue;
-        }
-        const bytes = await readBytes(path);
-        insertImageMarkup(alt, bytesToDataUrl(bytes, `image/${ext}`));
-        showNotice("ok", "Image pasted. Save the file to store it next to the document.");
+        const src = await storePastedFile(path, ext, filePath);
+        insertImageMarkup(alt, src);
       } catch (caught) {
         showNotice("error", caught instanceof Error ? caught.message : "Unable to add image.");
       }

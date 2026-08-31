@@ -1,6 +1,6 @@
 [package]
 name = "readmd"
-version = "0.3.3"
+version = "0.3.4"
 description = "A native Windows Markdown workstation."
 authors = ["readmd"]
 edition = "2021"

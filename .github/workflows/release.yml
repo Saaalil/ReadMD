@@ -52,10 +52,10 @@ jobs:
           releaseBody: |
             Native Markdown editor for Windows and Linux. Open `.md`, `.txt`, and `.html` files locally, edit with a live preview, and export PDF, DOCX, or plain text. No account and no cloud.
 
-            ## 0.3.3
+            ## 0.3.4
 
-            - **Paste and drop images** the same way as GitHub. Ctrl+V a screenshot or drop a PNG/JPEG/GIF/WebP onto the window. If the document is saved, the image is written to a `{filename}-assets` folder beside it and a `![]()` link is inserted. Untitled files keep a temporary image until you save.
-            - **Window close works again.** The title-bar X could hang when unsaved changes or the command palette were involved. Closing now uses a native prompt, and the command palette has its own close button (Esc still works).
+            - **Paste images without base64.** Ctrl+V stores the file locally and inserts a short `img/a1b2c3d4.png` link. Saving copies those files into an `img` folder next to the Markdown file. Existing giant `data:image` blobs are rewritten the same way.
+            - Dropped images use the same short links.
 
             Installed copies of 0.3.1+ can install this from the in-app **Update now** bar.
 

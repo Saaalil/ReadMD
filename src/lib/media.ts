@@ -1,5 +1,7 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { isTauriRuntime } from "./native";
+import { joinPath } from "./document-kind";
+import { isTauriRuntime, pastedStoreDirSync } from "./native";
+import { isPasteRef, pasteRefName } from "./paste-image";
 
 export function unescapeBasic(value: string): string {
   return value
@@ -26,6 +28,29 @@ export function resolveMediaSrc(rawUrl: string, baseDir: string | null): string 
   if (lower.startsWith("javascript:") || lower.startsWith("vbscript:")) return null;
   if (/^https?:\/\//i.test(url) || /^data:image\//i.test(url) || /^blob:/i.test(url)) return url;
   if (/^data:/i.test(url)) return null;
+
+  if (isPasteRef(url) || /^img\//i.test(url)) {
+    const name = pasteRefName(url) ?? url.replace(/^img\//i, "");
+    if (baseDir) {
+      const local = toAbsolutePath(url, baseDir);
+      if (local) {
+        try {
+          return convertFileSrc(local);
+        } catch {
+          /* fall through to the paste store */
+        }
+      }
+    }
+    const store = pastedStoreDirSync();
+    if (store && name && isTauriRuntime()) {
+      try {
+        return convertFileSrc(joinPath(store, name));
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
 
   const absolute = toAbsolutePath(url, baseDir);
   if (!absolute || !isTauriRuntime()) return null;

@@ -182,6 +182,22 @@ export async function readBytes(path: string): Promise<Uint8Array> {
   return Uint8Array.from(contents);
 }
 
+let pasteStore: string | null = null;
+
+export async function pastedStoreDir(): Promise<string> {
+  if (!isTauriRuntime()) {
+    throw new Error("Paste store is only available in the desktop app.");
+  }
+  if (!pasteStore) {
+    pasteStore = await invoke<string>("pasted_dir");
+  }
+  return pasteStore;
+}
+
+export function pastedStoreDirSync(): string | null {
+  return pasteStore;
+}
+
 export function directoryOf(path: string | null): string | null {
   return path ? dirFromPath(path) : null;
 }
