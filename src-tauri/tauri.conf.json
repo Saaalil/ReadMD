@@ -1,0 +1,66 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "readmd",
+  "version": "0.2.1",
+  "identifier": "app.readmd.desktop",
+  "build": {
+    "beforeDevCommand": "npm.cmd run dev",
+    "beforeBuildCommand": "npm.cmd run build",
+    "devUrl": "http://127.0.0.1:1420",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "readmd",
+        "width": 1280,
+        "height": 840,
+        "minWidth": 920,
+        "minHeight": 640,
+        "decorations": true,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' asset: data: blob: https: http:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-src 'self' blob: data:"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["msi", "nsis"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "publisher": "readmd",
+    "category": "Productivity",
+    "shortDescription": "Native Markdown workstation for Windows",
+    "longDescription": "Open, edit, render, and export Markdown and text files locally.",
+    "fileAssociations": [
+      {
+        "ext": ["md", "markdown", "mdown", "mkdn", "mdx"],
+        "name": "Markdown Document",
+        "description": "Markdown document",
+        "mimeType": "text/markdown",
+        "role": "Editor"
+      },
+      {
+        "ext": ["html", "htm"],
+        "name": "HTML Document",
+        "description": "HTML document",
+        "mimeType": "text/html",
+        "role": "Editor"
+      },
+      {
+        "ext": ["txt"],
+        "name": "Text Document",
+        "description": "Plain text document",
+        "mimeType": "text/plain",
+        "role": "Editor"
+      }
+    ]
+  }
+}

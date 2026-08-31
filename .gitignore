@@ -1,0 +1,25 @@
+# dependencies
+node_modules/
+
+# frontend / rust build output
+dist/
+src-tauri/target/
+src-tauri/gen/
+
+# generated extras
+src-tauri/app-icon.png
+src-tauri/icons/android/
+src-tauri/icons/ios/
+src-tauri/icons/Square*.png
+src-tauri/icons/StoreLogo.png
+
+# local tooling
+.commandcode/
+.idea/
+.vscode/
+*.log
+.DS_Store
+Thumbs.db
+*.pdb
+.env
+.env.*

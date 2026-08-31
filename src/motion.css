@@ -1,0 +1,184 @@
+/* Motion: short, cancelable, transform/opacity only.
+   Disabled automatically when the user prefers reduced motion. */
+
+:root {
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --dur-fast: 140ms;
+  --dur-normal: 200ms;
+  --dur-slow: 280ms;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .document-meta {
+    animation: doc-enter var(--dur-slow) var(--ease-out) both;
+  }
+
+  .prose {
+    animation: doc-enter var(--dur-slow) var(--ease-out) both;
+    animation-delay: 40ms;
+  }
+
+  @keyframes doc-enter {
+    from {
+      opacity: 0;
+      transform: translateY(8px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .toast {
+    animation: toast-in var(--dur-normal) var(--ease-out) both;
+  }
+
+  .toast.leaving {
+    animation: toast-out 160ms var(--ease-standard) both;
+  }
+
+  @keyframes toast-in {
+    from {
+      opacity: 0;
+      transform: translateY(10px) scale(0.98);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+
+  @keyframes toast-out {
+    from {
+      opacity: 1;
+      transform: translateY(0);
+    }
+    to {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+  }
+
+  .dot {
+    animation: dot-pulse 2.4s ease-in-out infinite;
+  }
+
+  @keyframes dot-pulse {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.45;
+    }
+  }
+
+  button {
+    transition:
+      background-color var(--dur-fast) var(--ease-standard),
+      border-color var(--dur-fast) var(--ease-standard),
+      color var(--dur-fast) var(--ease-standard),
+      filter var(--dur-fast) var(--ease-standard);
+  }
+
+  button:active:not(.mode button, .palette-list button, .outline-item) {
+    transform: scale(0.97);
+  }
+
+  .mode-pill {
+    transition: transform var(--dur-normal) var(--ease-out);
+  }
+
+  .menu,
+  .palette,
+  .shortcuts {
+    animation: pop-in var(--dur-normal) var(--ease-out) both;
+  }
+
+  .palette-backdrop {
+    animation: fade-in var(--dur-fast) var(--ease-standard) both;
+  }
+
+  @keyframes pop-in {
+    from {
+      opacity: 0;
+      transform: translateY(8px) scale(0.98);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+
+  .findbar {
+    animation: bar-in var(--dur-normal) var(--ease-out) both;
+  }
+
+  @keyframes bar-in {
+    from {
+      opacity: 0;
+      transform: translateY(-6px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .drop-overlay {
+    animation: fade-in var(--dur-fast) var(--ease-standard) both;
+  }
+
+  .drop-overlay div {
+    animation: pop-in var(--dur-normal) var(--ease-out) both;
+  }
+
+  .find-flash {
+    animation: flash-out 900ms var(--ease-standard) both;
+  }
+
+  @keyframes flash-out {
+    0% {
+      outline-color: var(--accent);
+    }
+    100% {
+      outline-color: transparent;
+    }
+  }
+
+  .outline-item {
+    transition:
+      background-color var(--dur-fast) var(--ease-standard),
+      color var(--dur-fast) var(--ease-standard);
+  }
+
+  .editor-pane {
+    view-transition-name: editor-pane;
+  }
+
+  .preview-pane {
+    view-transition-name: preview-pane;
+  }
+
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation: none;
+    mix-blend-mode: normal;
+  }
+
+  ::view-transition-group(editor-pane),
+  ::view-transition-group(preview-pane) {
+    animation-duration: var(--dur-normal);
+    animation-timing-function: var(--ease-out);
+  }
+}
