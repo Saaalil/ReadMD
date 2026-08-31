@@ -39,6 +39,41 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
+      - name: Prefetch NSIS
+        if: matrix.platform == 'windows-latest'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $tools = Join-Path $env:LOCALAPPDATA "tauri"
+          New-Item -ItemType Directory -Force -Path $tools | Out-Null
+          $zip = Join-Path $tools "nsis-3.zip"
+          $urls = @(
+            "https://github.com/tauri-apps/binary-releases/releases/download/nsis-3/nsis-3.zip",
+            "https://github.com/tauri-apps/binary-releases/releases/download/nsis-3.11/nsis-3.11.zip"
+          )
+          $downloaded = $false
+          foreach ($url in $urls) {
+            Write-Host "Downloading $url"
+            & curl.exe -L --retry 8 --retry-delay 5 --retry-all-errors --connect-timeout 30 --fail -o $zip $url
+            if ($LASTEXITCODE -eq 0 -and (Test-Path $zip) -and ((Get-Item $zip).Length -gt 1000000)) {
+              $downloaded = $true
+              break
+            }
+            Start-Sleep -Seconds 8
+          }
+          if (-not $downloaded) {
+            Write-Warning "Could not prefetch NSIS. The Tauri bundler will try the download itself."
+            exit 0
+          }
+          $nsis = Join-Path $tools "NSIS"
+          if (Test-Path $nsis) { Remove-Item -Recurse -Force $nsis }
+          Expand-Archive -Force -Path $zip -DestinationPath $tools
+          $inner = Get-ChildItem $tools -Directory | Where-Object { $_.Name -like "nsis-3*" } | Select-Object -First 1
+          if (-not $inner) { throw "NSIS zip did not contain an nsis-3* folder" }
+          Move-Item $inner.FullName $nsis
+          Write-Host "NSIS ready at $nsis"
+
       - name: Install frontend
         run: npm ci
 
@@ -51,6 +86,10 @@ jobs:
           releaseName: ReadMD ${{ github.ref_name }}
           releaseBody: |
             Native Markdown editor for Windows and Linux. Open `.md`, `.txt`, and `.html` files locally, edit with a live preview, and export PDF, DOCX, or plain text. No account and no cloud.
+
+            ## 0.3.10
+
+            - Same as 0.3.9. The Windows installer is rebuilt after GitHub returned 504 while fetching NSIS.
 
             ## 0.3.9
 
