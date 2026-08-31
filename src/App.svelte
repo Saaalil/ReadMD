@@ -1,11 +1,12 @@
 <script lang="ts">
   import CodeEditor from "./lib/CodeEditor.svelte";
   import Welcome from "./lib/Welcome.svelte";
-  import { dirFromPath, displayNameFromPath, documentKindFromName, kindLabel } from "./lib/document-kind";
+  import { dirFromPath, displayNameFromPath, documentKindFromName, joinPath, kindLabel } from "./lib/document-kind";
   import { markdownToDocx } from "./lib/docx";
   import { withExtension } from "./lib/download";
   import { previewHtmlDocument } from "./lib/html-preview";
-  import { outlineFromParsed, parseMarkdown, renderMarkdown } from "./lib/markdown";
+  import { outlineFromParsed, parseMarkdown, renderMarkdown, typesetMath } from "./lib/markdown";
+  import { cacheMediaBytes, hydrateLocalImages, rewriteHtmlMedia } from "./lib/media";
   import { lineAtRoot, scrollRootToLine } from "./lib/scroll-sync";
   import {
     getLaunchArgs,
@@ -17,6 +18,8 @@
     openMarkdownFile,
     askDiscardChanges,
     pastedStoreDir,
+    pastedStoreDirSync,
+    readBytes,
     saveFile,
     setWindowTitle,
     type OpenedFile
@@ -42,6 +45,7 @@
     isImagePath,
     markdownImage,
     materializeEmbeddedImages,
+    pasteRefName,
     storePastedFile,
     storePastedImage
   } from "./lib/paste-image";
@@ -133,6 +137,7 @@ export function hello() {
   let unlistenClose: (() => void) | null = null;
   let unlistenDrop: (() => void) | null = null;
   let previewEpoch = $state(0);
+  let mediaTick = $state(0);
   let saving = $state(false);
   let autoSaveTimer: ReturnType<typeof setTimeout> | null = null;
   let syncLock: "editor" | "preview" | null = null;
@@ -154,13 +159,13 @@ export function hello() {
 
   let parsed = $derived(parseMarkdown(previewSource));
   let kind = $derived(documentKindFromName(fileName));
-  let html = $derived(
-    kind === "text"
-      ? renderPlainText(previewSource)
-      : kind === "html"
-        ? previewHtmlDocument(previewSource)
-        : renderMarkdown(parsed, filePath ? dirFromPath(filePath) : null)
-  );
+  let docDir = $derived(filePath ? dirFromPath(filePath) : null);
+  let html = $derived.by(() => {
+    mediaTick;
+    if (kind === "text") return renderPlainText(previewSource, docDir);
+    if (kind === "html") return rewriteHtmlMedia(previewHtmlDocument(previewSource), docDir);
+    return renderMarkdown(parsed, docDir);
+  });
   let outline = $derived(kind === "markdown" ? outlineFromParsed(parsed) : []);
   let title = $derived(fileName.replace(/\.[^.]+$/, "") || "Untitled");
   let words = $derived(previewSource.trim() ? previewSource.trim().split(/\s+/).length : 0);
@@ -189,6 +194,21 @@ export function hello() {
 
   $effect(() => {
     void setWindowTitle(windowTitle);
+  });
+
+  $effect(() => {
+    const source = previewSource;
+    const dir = docDir;
+    void hydrateLocalImages(source, dir).then((changed) => {
+      if (changed) mediaTick += 1;
+    });
+  });
+
+  $effect(() => {
+    html;
+    if (!previewEl || kind === "html") return;
+    const prose = previewEl.querySelector(".prose");
+    if (prose instanceof HTMLElement) typesetMath(prose);
   });
 
   $effect(() => {
@@ -303,7 +323,10 @@ export function hello() {
       }
     };
     window.addEventListener("paste", onPaste, true);
-    void pastedStoreDir().then(() => collapseEmbeddedImages());
+    void pastedStoreDir().then(() => {
+      mediaTick += 1;
+      void collapseEmbeddedImages();
+    });
     window.setTimeout(() => {
       if (welcomeOpen) return;
       void offerUpdate();
@@ -919,6 +942,8 @@ export function hello() {
   async function insertImageBytes(bytes: Uint8Array, ext: string, _mime: string, alt: string): Promise<void> {
     try {
       const src = await storePastedImage(bytes, ext, filePath);
+      cacheMediaBytes(src, bytes, ext);
+      mediaTick += 1;
       insertImageMarkup(alt, src);
     } catch (caught) {
       showNotice("error", caught instanceof Error ? caught.message : "Unable to paste image.");
@@ -943,6 +968,16 @@ export function hello() {
         const ext = extensionFromPath(path);
         const alt = displayNameFromPath(path).replace(/\.[^.]+$/, "") || "image";
         const src = await storePastedFile(path, ext, filePath);
+        const name = pasteRefName(src);
+        const store = pastedStoreDirSync();
+        if (name && store) {
+          try {
+            cacheMediaBytes(src, await readBytes(joinPath(store, name)), ext);
+            mediaTick += 1;
+          } catch {
+            /* hydrate will pick the file up on the next preview pass */
+          }
+        }
         insertImageMarkup(alt, src);
       } catch (caught) {
         showNotice("error", caught instanceof Error ? caught.message : "Unable to add image.");

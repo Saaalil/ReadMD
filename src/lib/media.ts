@@ -1,7 +1,10 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { joinPath } from "./document-kind";
-import { isTauriRuntime, pastedStoreDirSync } from "./native";
+import { isTauriRuntime, pastedStoreDir, pastedStoreDirSync, readBytes } from "./native";
 import { isPasteRef, pasteRefName } from "./paste-image";
+
+const blobByRef = new Map<string, string>();
+const missByRef = new Set<string>();
 
 export function unescapeBasic(value: string): string {
   return value
@@ -21,6 +24,50 @@ export function splitMarkdownDestination(raw: string): { url: string; title: str
   return { url: stripBrackets(text), title: "" };
 }
 
+export function cacheMediaBytes(ref: string, bytes: Uint8Array, ext: string): string {
+  const key = normalizeRef(ref);
+  const previous = blobByRef.get(key);
+  if (previous) URL.revokeObjectURL(previous);
+  const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: mimeFromExt(ext) }));
+  blobByRef.set(key, url);
+  for (const missed of [...missByRef]) {
+    if (missed.endsWith(`::${key}`)) missByRef.delete(missed);
+  }
+  return url;
+}
+
+export async function hydrateLocalImages(source: string, baseDir: string | null): Promise<boolean> {
+  if (!isTauriRuntime()) return false;
+  try {
+    await pastedStoreDir();
+  } catch {
+    return false;
+  }
+
+  let changed = false;
+  for (const raw of collectLocalMediaRefs(source)) {
+    const key = normalizeRef(raw);
+    if (blobByRef.has(key)) continue;
+    const miss = `${baseDir ?? ""}::${key}`;
+    if (missByRef.has(miss)) continue;
+    const name = fileNameOf(raw);
+    const ext = name?.match(/\.([a-z0-9]+)$/i)?.[1] ?? "png";
+    let found = false;
+    for (const path of localCandidates(raw, baseDir)) {
+      try {
+        cacheMediaBytes(raw, await readBytes(path), ext);
+        changed = true;
+        found = true;
+        break;
+      } catch {
+        // Try the next location (paste cache, then the document img/ folder).
+      }
+    }
+    if (!found) missByRef.add(miss);
+  }
+  return changed;
+}
+
 export function resolveMediaSrc(rawUrl: string, baseDir: string | null): string | null {
   const url = stripBrackets(unescapeBasic(rawUrl).trim());
   if (!url) return null;
@@ -29,36 +76,19 @@ export function resolveMediaSrc(rawUrl: string, baseDir: string | null): string 
   if (/^https?:\/\//i.test(url) || /^data:image\//i.test(url) || /^blob:/i.test(url)) return url;
   if (/^data:/i.test(url)) return null;
 
-  if (isPasteRef(url) || /^img\//i.test(url)) {
-    const name = pasteRefName(url) ?? url.replace(/^img\//i, "");
-    if (baseDir) {
-      const local = toAbsolutePath(url, baseDir);
-      if (local) {
-        try {
-          return convertFileSrc(local);
-        } catch {
-          /* fall through to the paste store */
-        }
-      }
-    }
-    const store = pastedStoreDirSync();
-    if (store && name && isTauriRuntime()) {
-      try {
-        return convertFileSrc(joinPath(store, name));
-      } catch {
-        return null;
-      }
-    }
-    return null;
-  }
+  const cached = blobByRef.get(normalizeRef(url));
+  if (cached) return cached;
 
-  const absolute = toAbsolutePath(url, baseDir);
-  if (!absolute || !isTauriRuntime()) return null;
-  try {
-    return convertFileSrc(absolute);
-  } catch {
-    return null;
+  if (!isTauriRuntime()) return null;
+
+  for (const path of localCandidates(url, baseDir)) {
+    try {
+      return convertFileSrc(path);
+    } catch {
+      continue;
+    }
   }
+  return null;
 }
 
 export function renderMarkdownImage(alt: string, destination: string, baseDir: string | null): string {
@@ -78,6 +108,69 @@ export function rewriteHtmlMedia(html: string, baseDir: string | null): string {
     if (!resolved || resolved === raw) return full;
     return `<img${attrs}src="${escapeAttr(resolved)}"`;
   });
+}
+
+function collectLocalMediaRefs(source: string): string[] {
+  const refs = new Set<string>();
+  for (const match of source.matchAll(/!\[[^\]]*\]\(([^)]+)\)/g)) {
+    const url = splitMarkdownDestination(match[1] ?? "").url;
+    if (url && isLocalMediaUrl(url)) refs.add(url);
+  }
+  for (const match of source.matchAll(/<img\b[^>]*\bsrc=["']([^"']+)["']/gi)) {
+    const url = unescapeBasic(match[1] ?? "").trim();
+    if (url && isLocalMediaUrl(url)) refs.add(url);
+  }
+  return [...refs];
+}
+
+function isLocalMediaUrl(url: string): boolean {
+  const lower = url.toLowerCase();
+  if (/^(https?:|data:|blob:|javascript:|vbscript:|mailto:|#)/i.test(lower)) return false;
+  return Boolean(fileNameOf(url));
+}
+
+function localCandidates(url: string, baseDir: string | null): string[] {
+  const paths: string[] = [];
+  const name = fileNameOf(url);
+  const store = pastedStoreDirSync();
+  if (store && name) paths.push(joinPath(store, name));
+  const beside = toAbsolutePath(url, baseDir);
+  if (beside && beside !== paths[0]) paths.push(beside);
+  return paths;
+}
+
+function fileNameOf(url: string): string | null {
+  const paste = pasteRefName(url);
+  if (paste) return paste;
+  if (isPasteRef(url) || /^img\//i.test(url)) {
+    return url.replace(/^img\//i, "").split(/[\\/]/).pop() ?? null;
+  }
+  const name = url.split(/[\\/]/).pop() ?? "";
+  return /\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i.test(name) ? name : null;
+}
+
+function normalizeRef(url: string): string {
+  return stripBrackets(unescapeBasic(url).trim()).replace(/\\/g, "/").toLowerCase();
+}
+
+function mimeFromExt(ext: string): string {
+  switch (ext.toLowerCase().replace(/^\./, "")) {
+    case "jpg":
+    case "jpeg":
+      return "image/jpeg";
+    case "gif":
+      return "image/gif";
+    case "webp":
+      return "image/webp";
+    case "svg":
+      return "image/svg+xml";
+    case "bmp":
+      return "image/bmp";
+    case "avif":
+      return "image/avif";
+    default:
+      return "image/png";
+  }
 }
 
 function stripBrackets(value: string): string {

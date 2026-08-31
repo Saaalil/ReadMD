@@ -155,15 +155,12 @@ export function renderMarkdown(parsed: ParsedMarkdown, baseDir: string | null = 
     .join("\n");
   const diagnostics = parsed.diagnostics.map((item) => `<li>${escapeHtml(item)}</li>`).join("");
   const warning = diagnostics ? `<aside class="diagnostics"><strong>Rendering notes</strong><ul>${diagnostics}</ul></aside>` : "";
+  return `${warning}${body}`;
+}
 
-  const html = `${warning}${body}`;
-
-  // KaTeX typesets real math in a detached node so the main preview
-  // only re-renders when the debounced source actually changes.
-  const host = document.createElement("div");
-  host.innerHTML = html;
+export function typesetMath(root: HTMLElement): void {
   try {
-    renderMathInElement(host, {
+    renderMathInElement(root, {
       delimiters: [
         { left: "$$", right: "$$", display: true },
         { left: "\\[", right: "\\]", display: true },
@@ -176,7 +173,6 @@ export function renderMarkdown(parsed: ParsedMarkdown, baseDir: string | null = 
   } catch {
     // Rendering falls back to the raw LaTeX text on failure.
   }
-  return host.innerHTML;
 }
 
 function renderBlock(block: MarkdownBlock, baseDir: string | null): string {
