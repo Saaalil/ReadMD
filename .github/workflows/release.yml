@@ -52,6 +52,10 @@ jobs:
           releaseBody: |
             Native Markdown editor for Windows and Linux. Open `.md`, `.txt`, and `.html` files locally, edit with a live preview, and export PDF, DOCX, or plain text. No account and no cloud.
 
+            ## 0.3.7
+
+            - **Pasted images show in the preview.** Short `img/….png` links are loaded from the paste cache and from the document's `img` folder, so Ctrl+V and drop display the picture instead of the Markdown text.
+
             ## 0.3.6
 
             - **Reopen the last file after relaunch.** Recents and restart were blocked by Tauri's file scope. The app now reads and writes documents through its own backend, so the file you were editing comes back.
