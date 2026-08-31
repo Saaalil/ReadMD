@@ -23,3 +23,7 @@ Thumbs.db
 *.pdb
 .env
 .env.*
+
+# installers belong on GitHub Releases, not in git
+release/*.exe
+release/*.msi

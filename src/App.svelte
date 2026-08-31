@@ -712,7 +712,7 @@ export function hello() {
 <main
   class="app"
   class:dragging
-  style="--preview-zoom: {zoom / 100}; --mode-index: {modeIndex}"
+  style="--preview-zoom: {zoom / 100}"
   ondrop={handleDrop}
   ondragover={(event) => event.preventDefault()}
   ondragenter={handleDragEnter}
@@ -746,7 +746,7 @@ export function hello() {
       {/if}
     </div>
 
-    <nav class="mode" aria-label="View mode">
+    <nav class="mode" style="--mode-index: {modeIndex}" aria-label="View mode">
       <span class="mode-pill" aria-hidden="true"></span>
       <button class:active={mode === "reader"} aria-current={mode === "reader" ? "page" : undefined} onclick={() => switchMode("reader")} title="Reader (Ctrl+1)">Reader</button>
       <button class:active={mode === "split"} aria-current={mode === "split" ? "page" : undefined} onclick={() => switchMode("split")} title="Split (Ctrl+2)">Split</button>

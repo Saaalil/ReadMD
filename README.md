@@ -4,15 +4,17 @@ Native Windows desktop app for opening, editing, and exporting Markdown, HTML, a
 
 ## Download (Windows)
 
-Latest build: **0.2.1**
+Latest: **[0.2.2 on GitHub Releases](https://github.com/Saaalil/ReadMD/releases)** — that is the install page, same idea as [MarkEdit’s releases](https://github.com/MarkEdit-app/MarkEdit/releases).
 
 | File | What it is |
 | --- | --- |
-| [readmd_0.2.1_x64-setup.exe](release/readmd_0.2.1_x64-setup.exe) | Installer (recommended) |
-| [readmd_0.2.1_x64_en-US.msi](release/readmd_0.2.1_x64_en-US.msi) | MSI installer |
-| [readmd.exe](release/readmd.exe) | Portable app binary |
+| `readmd_*_x64-setup.exe` | NSIS installer (recommended) |
+| `readmd_*_x64_en-US.msi` | MSI installer |
+| `readmd.exe` | Portable app binary |
 
 Run the setup exe. After install, double-click `.md`, `.txt`, or `.html` files to open them in ReadMD.
+
+Tag a version (`v0.2.2`) to cut a new release. GitHub Actions builds Windows installers and attaches them to the release.
 
 ## Features
 
