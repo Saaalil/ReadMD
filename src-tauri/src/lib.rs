@@ -24,7 +24,15 @@ pub fn run() {
                 let _ = window.set_focus();
             }
         }))
-        .invoke_handler(tauri::generate_handler![launch_args, write_bytes, copy_file, read_bytes, pasted_dir])
+        .invoke_handler(tauri::generate_handler![
+            launch_args,
+            write_bytes,
+            write_text,
+            copy_file,
+            read_bytes,
+            read_text,
+            pasted_dir
+        ])
         .setup(|app| {
             // File opened via double-click / "Open with" at first launch.
             if let Some(path) = std::env::args().skip(1).find(|arg| !arg.starts_with('-')) {
@@ -51,6 +59,11 @@ fn write_bytes(path: String, contents: Vec<u8>) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn write_text(path: String, contents: String) -> Result<(), String> {
+    write_bytes(path, contents.into_bytes())
+}
+
+#[tauri::command]
 fn copy_file(from: String, to: String) -> Result<(), String> {
     let to = std::path::PathBuf::from(&to);
     if let Some(parent) = to.parent() {
@@ -63,6 +76,16 @@ fn copy_file(from: String, to: String) -> Result<(), String> {
 #[tauri::command]
 fn read_bytes(path: String) -> Result<Vec<u8>, String> {
     std::fs::read(&path).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn read_text(path: String) -> Result<String, String> {
+    let bytes = std::fs::read(&path).map_err(|error| error.to_string())?;
+    let mut text = String::from_utf8_lossy(&bytes).into_owned();
+    if text.starts_with('\u{feff}') {
+        text.remove(0);
+    }
+    Ok(text)
 }
 
 #[tauri::command]

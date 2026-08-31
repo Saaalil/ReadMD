@@ -100,11 +100,11 @@ export async function onCloseRequested(handler: () => boolean | Promise<boolean>
 
 async function openPath(path: string): Promise<OpenedFile | null> {
   try {
-    const [{ readTextFile }] = await Promise.all([import("@tauri-apps/plugin-fs")]);
+    const text = await invoke<string>("read_text", { path });
     return {
       path,
       name: displayNameFromPath(path),
-      text: await readTextFile(path)
+      text
     };
   } catch {
     return null;
@@ -116,10 +116,7 @@ export async function openMarkdownFile(defaultDir?: string | null): Promise<Open
     return openBrowserFile();
   }
 
-  const [{ open }, { readTextFile }] = await Promise.all([
-    import("@tauri-apps/plugin-dialog"),
-    import("@tauri-apps/plugin-fs")
-  ]);
+  const { open } = await import("@tauri-apps/plugin-dialog");
   const selected = await open({
     multiple: false,
     defaultPath: defaultDir || undefined,
@@ -127,12 +124,7 @@ export async function openMarkdownFile(defaultDir?: string | null): Promise<Open
   });
 
   if (typeof selected !== "string") return null;
-
-  return {
-    path: selected,
-    name: displayNameFromPath(selected),
-    text: await readTextFile(selected)
-  };
+  return openPath(selected);
 }
 
 export async function saveFile(
@@ -146,10 +138,7 @@ export async function saveFile(
     return null;
   }
 
-  const [{ save }, { writeFile, writeTextFile }] = await Promise.all([
-    import("@tauri-apps/plugin-dialog"),
-    import("@tauri-apps/plugin-fs")
-  ]);
+  const { save } = await import("@tauri-apps/plugin-dialog");
 
   const fallback = defaultDir ? joinPath(defaultDir, suggestedName) : suggestedName;
   const target =
@@ -161,9 +150,9 @@ export async function saveFile(
   if (typeof target !== "string") return null;
 
   if (typeof payload === "string") {
-    await writeTextFile(target, payload);
+    await invoke("write_text", { path: target, contents: payload });
   } else {
-    await writeFile(target, new Uint8Array(await payload.arrayBuffer()));
+    await writeBytes(target, new Uint8Array(await payload.arrayBuffer()));
   }
 
   return target;

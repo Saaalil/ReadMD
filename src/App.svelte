@@ -335,19 +335,27 @@ export function hello() {
       });
     });
     void getLaunchArgs().then(async (args) => {
-      const path = args.find((arg) => !arg.startsWith("-"));
+      const path = args.find((arg) => isLaunchDocument(arg));
       if (path) {
         const file = await openFileAtPath(path);
-        if (file) loadDocument(file);
-        return;
+        if (file) {
+          loadDocument(file);
+          return;
+        }
       }
       if (!initial.lastFile?.path) return;
       const file = await openFileAtPath(initial.lastFile.path);
       if (file) loadDocument(file);
+      else showNotice("error", "Could not reopen the last file.");
     });
     void onCloseRequested(() => confirmDiscard()).then((unlisten) => {
       unlistenClose = unlisten;
     });
+  }
+
+  function isLaunchDocument(arg: string): boolean {
+    if (!arg || arg.startsWith("-")) return false;
+    return /\.(md|markdown|mdown|mkdn|mdx|txt|html|htm)$/i.test(arg);
   }
 
   async function confirmDiscard(): Promise<boolean> {
