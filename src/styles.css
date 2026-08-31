@@ -834,14 +834,35 @@ button:disabled {
   overflow: hidden;
 }
 
-.palette input {
+.palette-head,
+.shortcuts-head {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+}
+
+.palette-head input {
   height: 44px;
   border: 0;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 0;
   border-radius: 0;
-  padding: 0 14px;
+  padding: 0 8px 0 14px;
   background: transparent;
   font-size: 15px;
+}
+
+.palette-close {
+  margin-right: 6px;
+  color: var(--muted);
+}
+
+.shortcuts-head {
+  padding: 4px 6px 4px 16px;
+}
+
+.shortcuts-head h2 {
+  margin: 0;
 }
 
 .palette-list {
@@ -869,11 +890,11 @@ button:disabled {
 }
 
 .shortcuts {
-  padding: 20px 22px 24px;
+  padding: 0 0 24px;
 }
 
 .shortcuts h2 {
-  margin: 0 0 16px;
+  margin: 0;
   font-size: 18px;
 }
 
@@ -881,6 +902,7 @@ button:disabled {
   display: grid;
   gap: 10px;
   margin: 0;
+  padding: 16px 22px 0;
 }
 
 .shortcuts dl div {

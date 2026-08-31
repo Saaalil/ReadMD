@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "readmd",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "identifier": "app.readmd.desktop",
   "build": {
     "beforeDevCommand": "node scripts/frontend.mjs dev",
@@ -41,8 +41,8 @@
     ],
     "publisher": "readmd",
     "category": "Productivity",
-    "shortDescription": "Native Markdown workstation",
-    "longDescription": "Open, edit, render, and export Markdown and text files locally.",
+    "shortDescription": "A small local Markdown editor for Windows and Linux.",
+    "longDescription": "ReadMD is a native desktop Markdown app. Open .md, .txt, and .html files on your machine, edit with a live preview, paste or drop images like GitHub, and export PDF, DOCX, or plain text. No account. No cloud.",
     "createUpdaterArtifacts": true,
     "fileAssociations": [
       {

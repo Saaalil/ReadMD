@@ -24,7 +24,7 @@ pub fn run() {
                 let _ = window.set_focus();
             }
         }))
-        .invoke_handler(tauri::generate_handler![launch_args])
+        .invoke_handler(tauri::generate_handler![launch_args, write_bytes, copy_file, read_bytes])
         .setup(|app| {
             // File opened via double-click / "Open with" at first launch.
             if let Some(path) = std::env::args().skip(1).find(|arg| !arg.starts_with('-')) {
@@ -39,4 +39,28 @@ pub fn run() {
 #[tauri::command]
 fn launch_args() -> Vec<String> {
     std::env::args().skip(1).collect()
+}
+
+#[tauri::command]
+fn write_bytes(path: String, contents: Vec<u8>) -> Result<(), String> {
+    let path = std::path::PathBuf::from(path);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    std::fs::write(&path, contents).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn copy_file(from: String, to: String) -> Result<(), String> {
+    let to = std::path::PathBuf::from(&to);
+    if let Some(parent) = to.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    std::fs::copy(&from, &to).map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn read_bytes(path: String) -> Result<Vec<u8>, String> {
+    std::fs::read(&path).map_err(|error| error.to_string())
 }

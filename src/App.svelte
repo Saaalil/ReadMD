@@ -1,7 +1,7 @@
 <script lang="ts">
   import CodeEditor from "./lib/CodeEditor.svelte";
   import Welcome from "./lib/Welcome.svelte";
-  import { dirFromPath, displayNameFromPath, documentKindFromName, kindLabel } from "./lib/document-kind";
+  import { dirFromPath, displayNameFromPath, documentKindFromName, joinPath, kindLabel } from "./lib/document-kind";
   import { markdownToDocx } from "./lib/docx";
   import { withExtension } from "./lib/download";
   import { previewHtmlDocument } from "./lib/html-preview";
@@ -15,8 +15,12 @@
     onNativeDrop,
     openFileAtPath,
     openMarkdownFile,
+    askDiscardChanges,
+    copyDiskFile,
     saveFile,
     setWindowTitle,
+    writeBytes,
+    readBytes,
     type OpenedFile
   } from "./lib/native";
   import { renderPlainText } from "./lib/plain-render";
@@ -32,6 +36,18 @@
     type ViewMode
   } from "./lib/prefs";
   import { checkForAppUpdate, type UpdateOffer } from "./lib/updater";
+  import {
+    assetsFolderFor,
+    bytesToDataUrl,
+    extensionForImage,
+    extensionFromPath,
+    htmlImage,
+    imageFileFromClipboard,
+    isImagePath,
+    markdownImage,
+    pastedImageName,
+    relativeMarkdownPath
+  } from "./lib/paste-image";
   import { onDestroy, onMount, tick } from "svelte";
 
   type Mode = ViewMode;
@@ -48,7 +64,7 @@ Open a Markdown file, edit it, and export it cleanly.
 - [x] Export PDF, DOCX, and clean TXT
 - [x] Jump headings, find text, and reopen recent files
 
-Images render from https URLs, and from files next to a saved Markdown document:
+Images render from https URLs, files next to a saved document, or paste and drop:
 
 ![Markdown](https://cdn.jsdelivr.net/gh/devicons/devicon/icons/markdown/markdown-original.svg)
 
@@ -114,6 +130,7 @@ export function hello() {
     replaceRanges: (ranges: Array<{ from: number; to: number }>, text: string) => void;
     getScrollLine: () => { line: number; ratio: number };
     scrollToLine: (line: number, ratio: number) => void;
+    insertAtCursor: (text: string) => void;
   } | undefined>(undefined);
   let htmlFrame = $state<HTMLIFrameElement | undefined>(undefined);
   let unlistenClose: (() => void) | null = null;
@@ -270,21 +287,43 @@ export function hello() {
       refreshPreview();
     };
     window.addEventListener("keydown", blockReload, true);
+    const onPaste = (event: ClipboardEvent) => {
+      const target = event.target;
+      if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return;
+      const file = imageFileFromClipboard(event);
+      if (!file) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      void insertImageFile(file);
+    };
+    window.addEventListener("paste", onPaste, true);
     window.setTimeout(() => {
       if (welcomeOpen) return;
       void offerUpdate();
     }, 2500);
-    return () => window.removeEventListener("keydown", blockReload, true);
+    return () => {
+      window.removeEventListener("keydown", blockReload, true);
+      window.removeEventListener("paste", onPaste, true);
+    };
   });
 
   if (isTauriRuntime()) {
     unlistenFileOpened = onFileOpened(loadDocument);
-    unlistenDrop = onNativeDrop((path) => {
+    unlistenDrop = onNativeDrop((paths) => {
       dragging = false;
       dragDepth = 0;
-      if (!confirmDiscard()) return;
-      void openFileAtPath(path).then((file) => {
-        if (file) loadDocument(file);
+      const images = paths.filter(isImagePath);
+      if (images.length) {
+        void insertImagesFromPaths(images);
+        return;
+      }
+      const path = paths[0];
+      if (!path) return;
+      void confirmDiscard().then((ok) => {
+        if (!ok) return;
+        void openFileAtPath(path).then((file) => {
+          if (file) loadDocument(file);
+        });
       });
     });
     void getLaunchArgs().then(async (args) => {
@@ -303,13 +342,18 @@ export function hello() {
     });
   }
 
-  function confirmDiscard(): boolean {
+  async function confirmDiscard(): Promise<boolean> {
+    closeOverlays();
     if (!dirty) return true;
-    return window.confirm("This document has unsaved changes. Discard them?");
+    if (filePath) {
+      await persist({ quiet: true, saveAs: false });
+      if (!dirty) return true;
+    }
+    return askDiscardChanges();
   }
 
   async function openFromPicker(): Promise<void> {
-    if (!confirmDiscard()) return;
+    if (!(await confirmDiscard())) return;
     closeOverlays();
     try {
       const file = await openMarkdownFile(lastOpenDir ?? lastSaveDir);
@@ -321,7 +365,7 @@ export function hello() {
   }
 
   async function openRecent(path: string): Promise<void> {
-    if (!confirmDiscard()) return;
+    if (!(await confirmDiscard())) return;
     closeOverlays();
     const file = await openFileAtPath(path);
     if (!file) {
@@ -332,8 +376,8 @@ export function hello() {
     loadDocument(file);
   }
 
-  function newDocument(): void {
-    if (!confirmDiscard()) return;
+  async function newDocument(): Promise<void> {
+    if (!(await confirmDiscard())) return;
     closeOverlays();
     fileName = "Untitled.md";
     filePath = null;
@@ -784,13 +828,113 @@ export function hello() {
     event.preventDefault();
     dragging = false;
     dragDepth = 0;
+    const images = droppedImageFiles(event);
+    if (images.length) {
+      if (isTauriRuntime()) return;
+      void insertImageFiles(images);
+      return;
+    }
     if (isTauriRuntime()) return;
     const file = event.dataTransfer?.files[0];
     if (!file) return;
-    if (!confirmDiscard()) return;
-    void file.text().then((text) => {
-      loadDocument({ path: null, name: file.name, text });
+    void confirmDiscard().then((ok) => {
+      if (!ok) return;
+      void file.text().then((text) => {
+        loadDocument({ path: null, name: file.name, text });
+      });
     });
+  }
+
+  function droppedImageFiles(event: DragEvent): File[] {
+    const data = event.dataTransfer;
+    if (!data) return [];
+    const files: File[] = [];
+    for (const file of data.files) {
+      if (file.type.startsWith("image/") || isImagePath(file.name)) files.push(file);
+    }
+    if (files.length) return files;
+    for (const item of data.items) {
+      if (item.kind === "file" && item.type.startsWith("image/")) {
+        const file = item.getAsFile();
+        if (file) files.push(file);
+      }
+    }
+    return files;
+  }
+
+  function assetDestination(ext: string): { abs: string; rel: string } | null {
+    if (!filePath || !isTauriRuntime()) return null;
+    const folder = assetsFolderFor(filePath);
+    const docDir = dirFromPath(filePath);
+    if (!folder || !docDir) return null;
+    const abs = joinPath(folder, pastedImageName(ext));
+    return {
+      abs,
+      rel: relativeMarkdownPath(docDir, abs)
+    };
+  }
+
+  function imageSnippet(alt: string, src: string): string {
+    return kind === "html" ? htmlImage(alt, src) : markdownImage(alt, src);
+  }
+
+  function insertImageMarkup(alt: string, src: string): void {
+    const snippet = `\n${imageSnippet(alt, src)}\n`;
+    if (editor) {
+      editor.insertAtCursor(snippet);
+      return;
+    }
+    markdown += snippet;
+    previewSource = markdown;
+    dirty = true;
+    scheduleAutoSave();
+  }
+
+  async function insertImageBytes(bytes: Uint8Array, ext: string, mime: string, alt: string): Promise<void> {
+    try {
+      const dest = assetDestination(ext);
+      if (dest) {
+        await writeBytes(dest.abs, bytes);
+        insertImageMarkup(alt, dest.rel);
+        return;
+      }
+      insertImageMarkup(alt, bytesToDataUrl(bytes, mime || `image/${ext}`));
+      showNotice("ok", "Image pasted. Save the file to store it next to the document.");
+    } catch (caught) {
+      showNotice("error", caught instanceof Error ? caught.message : "Unable to paste image.");
+    }
+  }
+
+  async function insertImageFile(file: File): Promise<void> {
+    const ext = extensionForImage(file);
+    const stem = file.name?.replace(/\.[^.]+$/, "") ?? "";
+    const alt = stem && stem.toLowerCase() !== "image" ? stem : "image";
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    await insertImageBytes(bytes, ext, file.type, alt);
+  }
+
+  async function insertImageFiles(files: File[]): Promise<void> {
+    for (const file of files) await insertImageFile(file);
+  }
+
+  async function insertImagesFromPaths(paths: string[]): Promise<void> {
+    for (const path of paths) {
+      try {
+        const ext = extensionFromPath(path);
+        const alt = displayNameFromPath(path).replace(/\.[^.]+$/, "") || "image";
+        const dest = assetDestination(ext);
+        if (dest) {
+          await copyDiskFile(path, dest.abs);
+          insertImageMarkup(alt, dest.rel);
+          continue;
+        }
+        const bytes = await readBytes(path);
+        insertImageMarkup(alt, bytesToDataUrl(bytes, `image/${ext}`));
+        showNotice("ok", "Image pasted. Save the file to store it next to the document.");
+      } catch (caught) {
+        showNotice("error", caught instanceof Error ? caught.message : "Unable to add image.");
+      }
+    }
   }
 
   function handleDragEnter(event: DragEvent): void {
@@ -1037,9 +1181,14 @@ export function hello() {
 
   {#if paletteOpen}
     <div class="palette-backdrop" role="presentation">
-      <button class="palette-scrim" aria-label="Close command palette" onclick={closeOverlays}></button>
+      <button class="palette-scrim" type="button" aria-label="Close command palette" onclick={closeOverlays}></button>
       <div class="palette" role="dialog" aria-modal="true" aria-label="Command palette" tabindex="-1">
-        <input bind:this={paletteInput} bind:value={paletteQuery} placeholder="Type a command…" aria-label="Filter commands" />
+        <div class="palette-head">
+          <input bind:this={paletteInput} bind:value={paletteQuery} placeholder="Type a command…" aria-label="Filter commands" />
+          <button type="button" class="icon-btn palette-close" onclick={closeOverlays} aria-label="Close command palette" title="Close (Esc)">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg>
+          </button>
+        </div>
         <div class="palette-list">
           {#each filteredCommands as command, index (command.id)}
             <button class:active={index === paletteIndex} onclick={command.run}>
@@ -1056,9 +1205,14 @@ export function hello() {
 
   {#if menu === "shortcuts"}
     <div class="palette-backdrop" role="presentation">
-      <button class="palette-scrim" aria-label="Close shortcuts" onclick={() => (menu = null)}></button>
+      <button class="palette-scrim" type="button" aria-label="Close shortcuts" onclick={() => (menu = null)}></button>
       <div class="shortcuts" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts" tabindex="-1">
-        <h2>Shortcuts</h2>
+        <div class="shortcuts-head">
+          <h2>Shortcuts</h2>
+          <button type="button" class="icon-btn palette-close" onclick={() => (menu = null)} aria-label="Close shortcuts" title="Close (Esc)">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg>
+          </button>
+        </div>
         <dl>
           <div><dt>Command palette</dt><dd>Ctrl+K</dd></div>
           <div><dt>Refresh preview</dt><dd>Ctrl+R</dd></div>
@@ -1068,6 +1222,7 @@ export function hello() {
           <div><dt>New / Open / Save</dt><dd>Ctrl+N / O / S</dd></div>
           <div><dt>Save as</dt><dd>Ctrl+Shift+S</dd></div>
           <div><dt>Reader / Split / Editor</dt><dd>Ctrl+1 / 2 / 3</dd></div>
+          <div><dt>Paste image</dt><dd>Ctrl+V</dd></div>
           <div><dt>Zoom</dt><dd>Ctrl + − 0</dd></div>
           <div><dt>Export PDF</dt><dd>Ctrl+P</dd></div>
         </dl>
@@ -1079,7 +1234,7 @@ export function hello() {
     <div class="drop-overlay" aria-hidden="true">
       <div>
         <img src="/icon.png" width="48" height="48" alt="" />
-        <p>Drop a Markdown or text file to open</p>
+        <p>Drop a Markdown file or an image</p>
       </div>
     </div>
   {/if}

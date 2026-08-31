@@ -152,6 +152,17 @@
     view.dispatch({ changes });
   }
 
+  export function insertAtCursor(text: string): void {
+    if (!view) return;
+    const range = view.state.selection.main;
+    view.dispatch({
+      changes: { from: range.from, to: range.to, insert: text },
+      selection: { anchor: range.from + text.length },
+      scrollIntoView: true
+    });
+    view.focus();
+  }
+
   export function getScrollLine(): { line: number; ratio: number } {
     if (!view) return { line: 1, ratio: 0 };
     const scroller = view.scrollDOM;

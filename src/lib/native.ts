@@ -11,7 +11,7 @@ export interface OpenedFile {
 
 type SavePayload = string | Blob;
 export type FileOpenListener = (file: OpenedFile) => void;
-export type NativeDropListener = (path: string) => void;
+export type NativeDropListener = (paths: string[]) => void;
 
 const DOCUMENT_FILTERS = [
   { name: "Documents", extensions: ["md", "markdown", "mdown", "mkdn", "mdx", "txt", "html", "htm"] },
@@ -47,8 +47,8 @@ export function onNativeDrop(listener: NativeDropListener): () => void {
   void import("@tauri-apps/api/webviewWindow").then(({ getCurrentWebviewWindow }) =>
     getCurrentWebviewWindow()
       .onDragDropEvent((event) => {
-        if (event.payload.type === "drop" && event.payload.paths[0]) {
-          listener(event.payload.paths[0]);
+        if (event.payload.type === "drop" && event.payload.paths.length) {
+          listener(event.payload.paths);
         }
       })
       .then((unlistenFn) => {
@@ -69,11 +69,31 @@ export async function setWindowTitle(title: string): Promise<void> {
   await getCurrentWindow().setTitle(title);
 }
 
+export async function askDiscardChanges(): Promise<boolean> {
+  if (!isTauriRuntime()) {
+    return window.confirm("This document has unsaved changes. Discard them?");
+  }
+  const { ask } = await import("@tauri-apps/plugin-dialog");
+  return ask("This document has unsaved changes. Discard them?", {
+    title: "readmd",
+    kind: "warning"
+  });
+}
+
 export async function onCloseRequested(handler: () => boolean | Promise<boolean>): Promise<() => void> {
   if (!isTauriRuntime()) return () => {};
   const { getCurrentWindow } = await import("@tauri-apps/api/window");
-  const unlisten = await getCurrentWindow().onCloseRequested(async (event) => {
-    if (!(await handler())) event.preventDefault();
+  const current = getCurrentWindow();
+  let closing = false;
+  const unlisten = await current.onCloseRequested(async (event) => {
+    if (closing) return;
+    // Prevent first: awaiting a dialog after CloseRequested without this
+    // deadlocks WebView2, so the window X appears to do nothing.
+    event.preventDefault();
+    const allowed = await handler();
+    if (!allowed) return;
+    closing = true;
+    await current.destroy();
   });
   return unlisten;
 }
@@ -147,6 +167,19 @@ export async function saveFile(
   }
 
   return target;
+}
+
+export async function writeBytes(path: string, bytes: Uint8Array): Promise<void> {
+  await invoke("write_bytes", { path, contents: Array.from(bytes) });
+}
+
+export async function copyDiskFile(from: string, to: string): Promise<void> {
+  await invoke("copy_file", { from, to });
+}
+
+export async function readBytes(path: string): Promise<Uint8Array> {
+  const contents = await invoke<number[]>("read_bytes", { path });
+  return Uint8Array.from(contents);
 }
 
 export function directoryOf(path: string | null): string | null {

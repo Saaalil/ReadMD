@@ -50,10 +50,23 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: ReadMD ${{ github.ref_name }}
           releaseBody: |
-            Windows: NSIS setup (recommended) and MSI.
-            Linux: AppImage (portable) and .deb.
+            Native Markdown editor for Windows and Linux. Open `.md`, `.txt`, and `.html` files locally, edit with a live preview, and export PDF, DOCX, or plain text. No account and no cloud.
 
-            Installed copies check this release for updates and can install in-app.
+            ## 0.3.3
+
+            - **Paste and drop images** the same way as GitHub. Ctrl+V a screenshot or drop a PNG/JPEG/GIF/WebP onto the window. If the document is saved, the image is written to a `{filename}-assets` folder beside it and a `![]()` link is inserted. Untitled files keep a temporary image until you save.
+            - **Window close works again.** The title-bar X could hang when unsaved changes or the command palette were involved. Closing now uses a native prompt, and the command palette has its own close button (Esc still works).
+
+            Installed copies of 0.3.1+ can install this from the in-app **Update now** bar.
+
+            ### Windows
+            - `readmd_*_x64-setup.exe` — installer (recommended)
+            - `readmd_*_x64_en-US.msi` — MSI
+            - `readmd.exe` — portable
+
+            ### Linux
+            - `readmd_*_amd64.AppImage` — portable (recommended)
+            - `readmd_*_amd64.deb` — Debian / Ubuntu
           releaseDraft: false
           prerelease: false
           includeUpdaterJson: true
