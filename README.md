@@ -30,6 +30,7 @@ Tag a version (`v0.3.6`) to cut a new release. GitHub Actions builds Windows and
 ## Features
 
 - Reader, split, and editor views with live preview
+- CommonMark rendering via markdown-it, plus tables, task lists, callouts, and math
 - Images from https URLs, paste/drop with short `img/` links (not base64), and files next to the document
 - Split-view scroll sync between editor and preview
 - Outline, command palette (`Ctrl+K`), find and replace (`Ctrl+F` / `Ctrl+H`)
