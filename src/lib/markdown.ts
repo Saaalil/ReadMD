@@ -1,5 +1,6 @@
 import "katex/dist/katex.min.css";
 import renderMathInElement from "katex/contrib/auto-render";
+import MarkdownIt, { type Token } from "markdown-it";
 import { renderMarkdownImage, rewriteHtmlMedia } from "./media";
 
 type Line = { startLine: number };
@@ -18,6 +19,8 @@ export type MarkdownBlock =
 export interface ParsedMarkdown {
   blocks: MarkdownBlock[];
   diagnostics: string[];
+  tokens: Token[];
+  lineOffset: number;
 }
 
 export interface OutlineItem {
@@ -28,93 +31,27 @@ export interface OutlineItem {
 
 const calloutPattern = /^\s*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*(.*)$/i;
 
+const md = new MarkdownIt("commonmark", { html: true }).enable(["table", "strikethrough"]);
+
 export function parseMarkdown(source: string): ParsedMarkdown {
   const normalized = source.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
   const lines = normalized.split("\n");
   const blocks: MarkdownBlock[] = [];
-  const diagnostics: string[] = [];
-  let index = 0;
+  let lineOffset = 0;
 
   if (lines[0] === "---" || lines[0] === "+++" || lines[0] === "{") {
     const frontmatter = readFrontmatter(lines);
     if (frontmatter) {
       blocks.push({ type: "frontmatter", startLine: 1, lines: frontmatter.lines });
-      index = frontmatter.nextIndex;
+      lineOffset = frontmatter.nextIndex;
     }
   }
 
-  while (index < lines.length) {
-    const line = lines[index] ?? "";
+  const body = lines.slice(lineOffset);
+  const tokens = md.parse(body.join("\n"), {});
+  blocks.push(...tokensToBlocks(tokens, lineOffset));
 
-    if (!line.trim()) {
-      index += 1;
-      continue;
-    }
-
-    const fence = line.match(/^ {0,3}(```+|~~~+)\s*([^`]*)$/);
-    if (fence) {
-      const result = readFence(lines, index, fence[1]);
-      blocks.push({
-        type: "code",
-        startLine: index + 1,
-        language: (fence[2] ?? "").trim().split(/\s+/)[0] ?? "",
-        lines: result.lines
-      });
-      if (!result.closed) {
-        diagnostics.push(`Unclosed code fence starting at line ${index + 1}.`);
-      }
-      index = result.nextIndex;
-      continue;
-    }
-
-    const heading = line.match(/^(#{1,6})\s+(.+?)\s*#*$/);
-    if (heading) {
-      blocks.push({ type: "heading", startLine: index + 1, depth: heading[1].length, text: heading[2].trim() });
-      index += 1;
-      continue;
-    }
-
-    if (/^ {0,3}(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
-      blocks.push({ type: "rule", startLine: index + 1 });
-      index += 1;
-      continue;
-    }
-
-    if (looksLikeTable(lines, index)) {
-      const result = readTable(lines, index);
-      blocks.push(result.table);
-      index = result.nextIndex;
-      continue;
-    }
-
-    const listMatch = line.match(/^(\s*)([-*+]|\d+[.)])\s+(.+)$/);
-    if (listMatch) {
-      const result = readList(lines, index, /^\s*\d+[.)]\s+/.test(line));
-      blocks.push(result.list);
-      index = result.nextIndex;
-      continue;
-    }
-
-    if (/^>\s?/.test(line)) {
-      const result = readQuote(lines, index);
-      blocks.push(result.quote);
-      index = result.nextIndex;
-      continue;
-    }
-
-    if (looksLikeHtml(line)) {
-      const result = readHtml(lines, index);
-      blocks.push({ type: "html", startLine: index + 1, lines: result.lines });
-      index = result.nextIndex;
-      continue;
-    }
-
-    const paragraph = readParagraph(lines, index);
-    blocks.push({ type: "paragraph", startLine: index + 1, lines: paragraph.lines });
-    index = paragraph.nextIndex;
-  }
-
-  return { blocks, diagnostics };
+  return { blocks, diagnostics: findUnclosedFences(body, lineOffset), tokens, lineOffset };
 }
 
 export function outlineFromParsed(parsed: ParsedMarkdown): OutlineItem[] {
@@ -173,6 +110,167 @@ export function typesetMath(root: HTMLElement): void {
   } catch {
     // Rendering falls back to the raw LaTeX text on failure.
   }
+}
+
+function tokensToBlocks(tokens: Token[], offset: number): MarkdownBlock[] {
+  const blocks: MarkdownBlock[] = [];
+  let index = 0;
+
+  while (index < tokens.length) {
+    const token = tokens[index];
+
+    switch (token.type) {
+      case "heading_open": {
+        const inline = tokens[index + 1];
+        blocks.push({
+          type: "heading",
+          startLine: startLineOf(token, offset),
+          depth: Number(token.tag.slice(1)) || 1,
+          text: inline?.type === "inline" ? inline.content : ""
+        });
+        index = closeIndex(tokens, index, "heading_close") + 1;
+        continue;
+      }
+      case "paragraph_open": {
+        const inline = tokens[index + 1];
+        blocks.push({
+          type: "paragraph",
+          startLine: startLineOf(token, offset),
+          lines: (inline?.type === "inline" ? inline.content : "").split("\n")
+        });
+        index = closeIndex(tokens, index, "paragraph_close") + 1;
+        continue;
+      }
+      case "fence":
+      case "code_block": {
+        blocks.push({
+          type: "code",
+          startLine: startLineOf(token, offset),
+          language: token.type === "fence" ? (token.info.trim().split(/\s+/)[0] ?? "") : "",
+          lines: token.content.replace(/\n$/, "").split("\n")
+        });
+        index += 1;
+        continue;
+      }
+      case "hr": {
+        blocks.push({ type: "rule", startLine: startLineOf(token, offset) });
+        index += 1;
+        continue;
+      }
+      case "html_block": {
+        blocks.push({
+          type: "html",
+          startLine: startLineOf(token, offset),
+          lines: token.content.replace(/\n$/, "").split("\n")
+        });
+        index += 1;
+        continue;
+      }
+      case "table_open": {
+        const end = closeIndex(tokens, index, "table_close");
+        blocks.push(tableFromTokens(tokens, index, end, startLineOf(token, offset)));
+        index = end + 1;
+        continue;
+      }
+      case "bullet_list_open":
+      case "ordered_list_open": {
+        const ordered = token.type === "ordered_list_open";
+        const end = closeIndex(tokens, index, ordered ? "ordered_list_close" : "bullet_list_close");
+        blocks.push({
+          type: "list",
+          startLine: startLineOf(token, offset),
+          ordered,
+          items: inlineContents(tokens, index, end)
+        });
+        index = end + 1;
+        continue;
+      }
+      case "blockquote_open": {
+        const end = closeIndex(tokens, index, "blockquote_close");
+        blocks.push({
+          type: "quote",
+          startLine: startLineOf(token, offset),
+          lines: inlineContents(tokens, index, end).flatMap((content) => content.split("\n"))
+        });
+        index = end + 1;
+        continue;
+      }
+      default:
+        index += 1;
+    }
+  }
+
+  return blocks;
+}
+
+function startLineOf(token: Token, offset: number): number {
+  return (token.map ? token.map[0] : 0) + 1 + offset;
+}
+
+function closeIndex(tokens: Token[], start: number, type: string): number {
+  const level = tokens[start].level;
+  for (let index = start + 1; index < tokens.length; index += 1) {
+    if (tokens[index].type === type && tokens[index].level === level) return index;
+  }
+  return tokens.length - 1;
+}
+
+function inlineContents(tokens: Token[], start: number, end: number): string[] {
+  const contents: string[] = [];
+  for (let index = start + 1; index < end; index += 1) {
+    if (tokens[index].type === "inline") contents.push(tokens[index].content);
+  }
+  return contents;
+}
+
+function tableFromTokens(
+  tokens: Token[],
+  start: number,
+  end: number,
+  startLine: number
+): Extract<MarkdownBlock, { type: "table" }> {
+  const rows: string[][] = [];
+  const aligns: Array<"left" | "center" | "right"> = [];
+  let row: string[] | null = null;
+
+  for (let index = start + 1; index < end; index += 1) {
+    const token = tokens[index];
+    if (token.type === "tr_open") {
+      row = [];
+    } else if (token.type === "tr_close" && row) {
+      rows.push(row);
+      row = null;
+    } else if (token.type === "th_open" || token.type === "td_open") {
+      const inline = tokens[index + 1];
+      row?.push(inline?.type === "inline" ? inline.content : "");
+      if (token.type === "th_open") aligns.push(cellAlign(token));
+    }
+  }
+
+  return { type: "table", startLine, rows, aligns };
+}
+
+function cellAlign(token: Token): "left" | "center" | "right" {
+  const style = String(token.attrGet("style") ?? "");
+  if (style.includes("center")) return "center";
+  if (style.includes("right")) return "right";
+  return "left";
+}
+
+function findUnclosedFences(lines: string[], offset: number): string[] {
+  let open: { marker: string; size: number; line: number } | null = null;
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const match = (lines[index] ?? "").match(/^ {0,3}(`{3,}|~{3,})/);
+    if (!match) continue;
+    if (!open) {
+      open = { marker: match[1][0], size: match[1].length, line: index + 1 + offset };
+    } else if (match[1][0] === open.marker && match[1].length >= open.size && /^ {0,3}(`{3,}|~{3,})\s*$/.test(lines[index] ?? "")) {
+      open = null;
+    }
+  }
+
+  return open ? [`Unclosed code fence starting at line ${open.line}.`] : [];
 }
 
 function renderBlock(block: MarkdownBlock, baseDir: string | null): string {
@@ -303,139 +401,12 @@ function readFrontmatter(lines: string[]): { lines: string[]; nextIndex: number 
   return null;
 }
 
-function readFence(lines: string[], start: number, fence: string): { lines: string[]; nextIndex: number; closed: boolean } {
-  const marker = fence[0];
-  const size = fence.length;
-  const body: string[] = [];
-
-  for (let index = start + 1; index < lines.length; index += 1) {
-    if (new RegExp(`^ {0,3}${escapeRegExp(marker)}{${size},}\\s*$`).test(lines[index] ?? "")) {
-      return { lines: body, nextIndex: index + 1, closed: true };
-    }
-    body.push(lines[index] ?? "");
-  }
-
-  return { lines: body, nextIndex: lines.length, closed: false };
-}
-
-function looksLikeTable(lines: string[], index: number): boolean {
-  const head = lines[index] ?? "";
-  const separator = lines[index + 1] ?? "";
-  return head.includes("|") && /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(separator);
-}
-
-function readTable(lines: string[], start: number): { table: Extract<MarkdownBlock, { type: "table" }>; nextIndex: number } {
-  const rows: string[][] = [];
-  const aligns = splitTableRow(lines[start + 1] ?? "").map((cell) => {
-    const trimmed = cell.trim();
-    if (trimmed.startsWith(":") && trimmed.endsWith(":")) return "center";
-    if (trimmed.endsWith(":")) return "right";
-    return "left";
-  });
-  let index = start;
-
-  while (index < lines.length && (lines[index] ?? "").includes("|") && (lines[index] ?? "").trim()) {
-    if (index !== start + 1) {
-      rows.push(splitTableRow(lines[index] ?? ""));
-    }
-    index += 1;
-  }
-
-  return { table: { type: "table", startLine: start + 1, rows, aligns }, nextIndex: index };
-}
-
-function splitTableRow(line: string): string[] {
-  const trimmed = line.trim().replace(/^\|/, "").replace(/\|$/, "");
-  const cells: string[] = [];
-  let current = "";
-  let escaped = false;
-
-  for (const char of trimmed) {
-    if (char === "\\" && !escaped) {
-      escaped = true;
-      current += char;
-      continue;
-    }
-    if (char === "|" && !escaped) {
-      cells.push(current.trim());
-      current = "";
-      continue;
-    }
-    escaped = false;
-    current += char;
-  }
-
-  cells.push(current.trim());
-  return cells;
-}
-
-function readList(lines: string[], start: number, ordered: boolean): { list: Extract<MarkdownBlock, { type: "list" }>; nextIndex: number } {
-  const items: string[] = [];
-  let index = start;
-  const pattern = ordered ? /^\s*\d+[.)]\s+(.+)$/ : /^\s*[-*+]\s+(.+)$/;
-
-  while (index < lines.length) {
-    const match = (lines[index] ?? "").match(pattern);
-    if (!match) break;
-    items.push(match[1]);
-    index += 1;
-  }
-
-  return { list: { type: "list", startLine: start + 1, ordered, items }, nextIndex: index };
-}
-
-function readQuote(lines: string[], start: number): { quote: Extract<MarkdownBlock, { type: "quote" }>; nextIndex: number } {
-  const body: string[] = [];
-  let index = start;
-
-  while (index < lines.length && /^>\s?/.test(lines[index] ?? "")) {
-    body.push((lines[index] ?? "").replace(/^>\s?/, ""));
-    index += 1;
-  }
-
-  return { quote: { type: "quote", startLine: start + 1, lines: body }, nextIndex: index };
-}
-
-function looksLikeHtml(line: string): boolean {
-  return /^ {0,3}<\/?[a-zA-Z][\w:-]*[\s>/]|^ {0,3}<!--|^ {0,3}<!doctype/i.test(line);
-}
-
-function readHtml(lines: string[], start: number): { lines: string[]; nextIndex: number } {
-  const body: string[] = [];
-  let index = start;
-  while (index < lines.length && (lines[index] ?? "").trim()) {
-    body.push(lines[index] ?? "");
-    index += 1;
-  }
-  return { lines: body, nextIndex: index };
-}
-
-function readParagraph(lines: string[], start: number): { lines: string[]; nextIndex: number } {
-  const body: string[] = [];
-  let index = start;
-
-  while (index < lines.length) {
-    const line = lines[index] ?? "";
-    if (!line.trim()) break;
-    if (/^(#{1,6})\s+/.test(line) || /^>\s?/.test(line) || /^ {0,3}(```+|~~~+)/.test(line)) break;
-    if (/^\s*([-*+]|\d+[.)])\s+/.test(line) || looksLikeTable(lines, index) || looksLikeHtml(line)) break;
-    body.push(line.trim());
-    index += 1;
-  }
-
-  return { lines: body, nextIndex: index };
-}
-
 function escapeHtml(value: string): string {
   return value
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function stripHeadingMarks(text: string): string {

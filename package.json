@@ -27,6 +27,7 @@
     "@tauri-apps/plugin-process": "^2.3.1",
     "@tauri-apps/plugin-updater": "^2.11.0",
     "katex": "^0.18.4",
+    "markdown-it": "^15.0.1",
     "svelte": "^5.34.9",
     "typescript": "^5.8.3",
     "vite": "^6.3.5"
