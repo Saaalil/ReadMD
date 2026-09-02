@@ -1,6 +1,6 @@
 import "katex/dist/katex.min.css";
 import renderMathInElement from "katex/contrib/auto-render";
-import MarkdownIt, { type Token } from "markdown-it";
+import MarkdownIt, { type Env, type Token } from "markdown-it";
 import { renderMarkdownImage, rewriteHtmlMedia } from "./media";
 
 type Line = { startLine: number };
@@ -29,9 +29,39 @@ export interface OutlineItem {
   text: string;
 }
 
+const safeLinkPattern = /^(https?:|mailto:|#|\.{0,2}\/|[A-Za-z]:\\)/;
 const calloutPattern = /^\s*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*(.*)$/i;
+const taskMarkerPattern = /^\[([ xX])\]\s+/;
 
 const md = new MarkdownIt("commonmark", { html: true }).enable(["table", "strikethrough"]);
+
+// markdown-it only exposes Token as a type, so borrow the constructor from a parsed token.
+const TokenClass = md.parse("x", {})[0].constructor as new (type: string, tag: string, nesting: 0 | 1 | -1) => Token;
+
+md.renderer.rules.fence = (tokens, idx) => renderCodeToken(tokens[idx]);
+md.renderer.rules.code_block = (tokens, idx) => renderCodeToken(tokens[idx]);
+
+md.renderer.rules.html_block = (tokens, idx, _options, env) =>
+  `<div class="raw-html"${attrText(tokens[idx])}>${rewriteHtmlMedia(tokens[idx].content, baseDirOf(env))}</div>`;
+
+md.renderer.rules.html_inline = (tokens, idx, _options, env) =>
+  rewriteHtmlMedia(tokens[idx].content, baseDirOf(env));
+
+md.renderer.rules.image = (tokens, idx, options, env, self) => {
+  const token = tokens[idx];
+  const src = String(token.attrGet("src") ?? "");
+  const title = token.attrGet("title");
+  const alt = self.renderInlineAsText(token.children ?? [], options, env);
+  const destination = title == null ? src : `${src} "${title}"`;
+  return renderMarkdownImage(alt, destination, baseDirOf(env));
+};
+
+md.renderer.rules.table_open = (tokens, idx) => `<div class="table-wrap"><table${attrText(tokens[idx])}>`;
+md.renderer.rules.table_close = () => "</table></div>";
+
+// The stylesheet targets del, not the s tags markdown-it emits for strikethrough.
+md.renderer.rules.s_open = () => "<del>";
+md.renderer.rules.s_close = () => "</del>";
 
 export function parseMarkdown(source: string): ParsedMarkdown {
   const normalized = source.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
@@ -50,46 +80,18 @@ export function parseMarkdown(source: string): ParsedMarkdown {
   const body = lines.slice(lineOffset);
   const tokens = md.parse(body.join("\n"), {});
   blocks.push(...tokensToBlocks(tokens, lineOffset));
+  decorateTokens(tokens, lineOffset, outlineFromBlocks(blocks));
 
   return { blocks, diagnostics: findUnclosedFences(body, lineOffset), tokens, lineOffset };
 }
 
 export function outlineFromParsed(parsed: ParsedMarkdown): OutlineItem[] {
-  const used = new Map<string, number>();
-  const items: OutlineItem[] = [];
-
-  for (const block of parsed.blocks) {
-    if (block.type !== "heading") continue;
-    const base = slugify(block.text);
-    const count = used.get(base) ?? 0;
-    used.set(base, count + 1);
-    items.push({
-      id: count === 0 ? base : `${base}-${count}`,
-      depth: block.depth,
-      text: stripHeadingMarks(block.text)
-    });
-  }
-
-  return items;
+  return outlineFromBlocks(parsed.blocks);
 }
 
 export function renderMarkdown(parsed: ParsedMarkdown, baseDir: string | null = null): string {
-  const outline = outlineFromParsed(parsed);
-  let headingIndex = 0;
-  const body = parsed.blocks
-    .filter((block) => block.type !== "frontmatter")
-    .map((block) => {
-      if (block.type === "heading") {
-        const item = outline[headingIndex] ?? { id: "section", depth: block.depth, text: block.text };
-        headingIndex += 1;
-        return markLine(
-          `<h${block.depth} id="${escapeHtml(item.id)}">${renderInline(block.text, baseDir)}</h${block.depth}>`,
-          block.startLine
-        );
-      }
-      return markLine(renderBlock(block, baseDir), block.startLine);
-    })
-    .join("\n");
+  const env: Env = { baseDir };
+  const body = md.renderer.render(parsed.tokens, md.options, env);
   const diagnostics = parsed.diagnostics.map((item) => `<li>${escapeHtml(item)}</li>`).join("");
   const warning = diagnostics ? `<aside class="diagnostics"><strong>Rendering notes</strong><ul>${diagnostics}</ul></aside>` : "";
   return `${warning}${body}`;
@@ -110,6 +112,167 @@ export function typesetMath(root: HTMLElement): void {
   } catch {
     // Rendering falls back to the raw LaTeX text on failure.
   }
+}
+
+function outlineFromBlocks(blocks: MarkdownBlock[]): OutlineItem[] {
+  const used = new Map<string, number>();
+  const items: OutlineItem[] = [];
+
+  for (const block of blocks) {
+    if (block.type !== "heading") continue;
+    const base = slugify(block.text);
+    const count = used.get(base) ?? 0;
+    used.set(base, count + 1);
+    items.push({
+      id: count === 0 ? base : `${base}-${count}`,
+      depth: block.depth,
+      text: stripHeadingMarks(block.text)
+    });
+  }
+
+  return items;
+}
+
+function decorateTokens(tokens: Token[], offset: number, outline: OutlineItem[]): void {
+  let headingIndex = 0;
+
+  for (const token of tokens) {
+    if (token.level === 0 && token.map && token.nesting >= 0 && token.type !== "inline") {
+      token.attrSet("data-line", String(token.map[0] + 1 + offset));
+    }
+    if (token.type === "heading_open" && token.level === 0) {
+      const item = outline[headingIndex];
+      headingIndex += 1;
+      if (item) token.attrSet("id", item.id);
+    }
+    if (token.type === "th_open" || token.type === "td_open") {
+      alignCell(token);
+    }
+    if (token.type === "inline" && token.children) {
+      hideUnsafeLinks(token.children);
+    }
+  }
+
+  transformTaskLists(tokens);
+  transformCallouts(tokens);
+}
+
+function transformTaskLists(tokens: Token[]): void {
+  const listStack: Token[] = [];
+
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (token.type === "bullet_list_open") {
+      listStack.push(token);
+      continue;
+    }
+    if (token.type === "bullet_list_close") {
+      listStack.pop();
+      continue;
+    }
+    if (token.type !== "list_item_open" || !listStack.length) continue;
+
+    const inline = findItemInline(tokens, index);
+    const first = inline?.children?.[0];
+    const match = first?.type === "text" ? first.content.match(taskMarkerPattern) : null;
+    if (!inline || !first || !match) continue;
+
+    const checked = match[1].toLowerCase() === "x";
+    first.content = first.content.slice(match[0].length);
+    inline.content = inline.content.replace(taskMarkerPattern, "");
+    token.attrJoin("class", "task-item");
+    const list = listStack[listStack.length - 1];
+    if (!String(list.attrGet("class") ?? "").includes("task-list")) {
+      list.attrJoin("class", "task-list");
+    }
+
+    const children = [
+      htmlToken(`<input type="checkbox" class="task-checkbox" disabled${checked ? " checked" : ""}>`),
+      htmlToken(checked ? "<span><del>" : "<span>"),
+      ...(inline.children ?? []),
+      htmlToken(checked ? "</del></span>" : "</span>")
+    ];
+    inline.children = children;
+  }
+}
+
+function findItemInline(tokens: Token[], itemIndex: number): Token | null {
+  const level = tokens[itemIndex].level;
+  for (let index = itemIndex + 1; index < tokens.length; index += 1) {
+    if (tokens[index].type === "list_item_close" && tokens[index].level === level) return null;
+    if (tokens[index].type === "inline") return tokens[index];
+  }
+  return null;
+}
+
+function transformCallouts(tokens: Token[]): void {
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (token.type !== "blockquote_open") continue;
+    const paragraph = tokens[index + 1];
+    const inline = tokens[index + 2];
+    if (paragraph?.type !== "paragraph_open" || inline?.type !== "inline") continue;
+    const first = inline.children?.[0];
+    if (first?.type !== "text") continue;
+    const match = first.content.match(calloutPattern);
+    if (!match) continue;
+
+    const title = match[1].toUpperCase();
+    token.tag = "aside";
+    token.attrJoin("class", `callout ${title.toLowerCase()}`);
+    tokens[closeIndex(tokens, index, "blockquote_close")].tag = "aside";
+    first.content = match[2] ?? "";
+    inline.children = [htmlToken(`<strong>${title}</strong>`), ...(inline.children ?? [])];
+  }
+}
+
+function htmlToken(content: string): Token {
+  const token = new TokenClass("html_inline", "", 0);
+  token.content = content;
+  return token;
+}
+
+function alignCell(token: Token): void {
+  const style = String(token.attrGet("style") ?? "");
+  token.attrs = (token.attrs ?? []).filter(([name]) => name !== "style");
+  const align = style.includes("center") ? "center" : style.includes("right") ? "right" : "left";
+  token.attrJoin("class", align);
+}
+
+function hideUnsafeLinks(children: Token[]): void {
+  const stack: boolean[] = [];
+
+  for (const child of children) {
+    if (child.type === "link_open") {
+      const href = String(child.attrGet("href") ?? "").trim();
+      const unsafe = !safeLinkPattern.test(href);
+      stack.push(unsafe);
+      if (unsafe) child.hidden = true;
+    } else if (child.type === "link_close") {
+      if (stack.pop()) child.hidden = true;
+    }
+  }
+}
+
+function renderCodeToken(token: Token): string {
+  const language = token.type === "fence" ? (token.info.trim().split(/\s+/)[0] ?? "") : "";
+  const languageAttr = language ? ` data-language="${escapeHtml(language)}"` : "";
+  const content = escapeHtml(token.content.replace(/\n$/, ""));
+  const attrs = attrText(token);
+  if (language.toLowerCase() === "mermaid") {
+    return `<figure class="diagram"${attrs}><figcaption>Mermaid</figcaption><pre><code${languageAttr}>${content}</code></pre></figure>`;
+  }
+  const label = escapeHtml(language || "text");
+  return `<figure class="code-block"${attrs}><figcaption class="code-toolbar"><span>${label}</span><button type="button" class="copy-code">Copy</button></figcaption><pre><code${languageAttr}>${content}</code></pre></figure>`;
+}
+
+function attrText(token: Token): string {
+  return (token.attrs ?? []).map(([name, value]) => ` ${name}="${escapeHtml(String(value))}"`).join("");
+}
+
+function baseDirOf(env: unknown): string | null {
+  const dir = (env as { baseDir?: string | null } | undefined)?.baseDir;
+  return typeof dir === "string" ? dir : null;
 }
 
 function tokensToBlocks(tokens: Token[], offset: number): MarkdownBlock[] {
@@ -273,112 +436,6 @@ function findUnclosedFences(lines: string[], offset: number): string[] {
   return open ? [`Unclosed code fence starting at line ${open.line}.`] : [];
 }
 
-function renderBlock(block: MarkdownBlock, baseDir: string | null): string {
-  switch (block.type) {
-    case "heading":
-      return `<h${block.depth}>${renderInline(block.text, baseDir)}</h${block.depth}>`;
-    case "paragraph":
-      return `<p>${renderInline(block.lines.join(" "), baseDir)}</p>`;
-    case "code":
-      return renderCode(block);
-    case "table":
-      return renderTable(block, baseDir);
-    case "list":
-      return renderList(block, baseDir);
-    case "quote":
-      return renderQuote(block, baseDir);
-    case "html":
-      return `<div class="raw-html">${rewriteHtmlMedia(block.lines.join("\n"), baseDir)}</div>`;
-    case "rule":
-      return "<hr>";
-    case "frontmatter":
-      return "";
-  }
-}
-
-function renderCode(block: Extract<MarkdownBlock, { type: "code" }>): string {
-  const language = block.language ? ` data-language="${escapeHtml(block.language)}"` : "";
-  const content = escapeHtml(block.lines.join("\n"));
-  if (block.language.toLowerCase() === "mermaid") {
-    return `<figure class="diagram"><figcaption>Mermaid</figcaption><pre><code${language}>${content}</code></pre></figure>`;
-  }
-  const label = escapeHtml(block.language || "text");
-  return `<figure class="code-block"><figcaption class="code-toolbar"><span>${label}</span><button type="button" class="copy-code">Copy</button></figcaption><pre><code${language}>${content}</code></pre></figure>`;
-}
-
-function renderTable(block: Extract<MarkdownBlock, { type: "table" }>, baseDir: string | null): string {
-  const [head = [], ...body] = block.rows;
-  const headings = head
-    .map((cell, index) => `<th class="${block.aligns[index] ?? "left"}">${renderInline(cell, baseDir)}</th>`)
-    .join("");
-  const rows = body
-    .map((row) => `<tr>${row.map((cell, index) => `<td class="${block.aligns[index] ?? "left"}">${renderInline(cell, baseDir)}</td>`).join("")}</tr>`)
-    .join("");
-
-  return `<div class="table-wrap"><table><thead><tr>${headings}</tr></thead><tbody>${rows}</tbody></table></div>`;
-}
-
-function renderList(block: Extract<MarkdownBlock, { type: "list" }>, baseDir: string | null): string {
-  const tag = block.ordered ? "ol" : "ul";
-  if (block.ordered) {
-    const items = block.items.map((item) => `<li>${renderInline(item, baseDir)}</li>`).join("");
-    return `<${tag}>${items}</${tag}>`;
-  }
-
-  const hasTasks = block.items.some((item) => /^\[[ xX]\]\s*/.test(item));
-  if (!hasTasks) {
-    const items = block.items.map((item) => `<li>${renderInline(item, baseDir)}</li>`).join("");
-    return `<${tag}>${items}</${tag}>`;
-  }
-
-  const items = block.items
-    .map((item) => {
-      const match = item.match(/^\[([ xX])\]\s*(.*)$/);
-      if (!match) return `<li>${renderInline(item, baseDir)}</li>`;
-      const checked = match[1].toLowerCase() === "x";
-      const checkbox = `<input type="checkbox" class="task-checkbox" disabled ${checked ? "checked" : ""}>`;
-      const label = checked ? `<del>${renderInline(match[2] ?? "", baseDir)}</del>` : renderInline(match[2] ?? "", baseDir);
-      return `<li class="task-item">${checkbox}<span>${label}</span></li>`;
-    })
-    .join("");
-  return `<${tag} class="task-list">${items}</${tag}>`;
-}
-
-function renderQuote(block: Extract<MarkdownBlock, { type: "quote" }>, baseDir: string | null): string {
-  const first = block.lines[0] ?? "";
-  const callout = first.match(calloutPattern);
-  if (callout) {
-    const title = callout[1].toUpperCase();
-    const rest = [callout[2], ...block.lines.slice(1)].filter(Boolean).join(" ");
-    return `<aside class="callout ${title.toLowerCase()}"><strong>${title}</strong><p>${renderInline(rest, baseDir)}</p></aside>`;
-  }
-  return `<blockquote>${block.lines.map((line) => `<p>${renderInline(line, baseDir)}</p>`).join("")}</blockquote>`;
-}
-
-function renderInline(value: string, baseDir: string | null): string {
-  let text = escapeHtml(value);
-  const images: string[] = [];
-  text = text.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_match, alt: string, destination: string) => {
-    images.push(renderMarkdownImage(alt, destination, baseDir));
-    return `\0IMG${images.length - 1}\0`;
-  });
-  text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, label: string, url: string) => {
-    const safeUrl = String(url).trim();
-    if (!/^(https?:|mailto:|#|\.{0,2}\/|[A-Za-z]:\\)/.test(safeUrl)) {
-      return label;
-    }
-    return `<a href="${escapeHtml(safeUrl)}">${label}</a>`;
-  });
-  text = text.replace(/`([^`]+)`/g, "<code>$1</code>");
-  text = text.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-  text = text.replace(/__([^_]+)__/g, "<strong>$1</strong>");
-  text = text.replace(/\*([^*]+)\*/g, "<em>$1</em>");
-  text = text.replace(/_([^_]+)_/g, "<em>$1</em>");
-  text = text.replace(/~~([^~]+)~~/g, "<del>$1</del>");
-  text = text.replace(/\0IMG(\d+)\0/g, (_match, index: string) => images[Number(index)] ?? "");
-  return text;
-}
-
 function readFrontmatter(lines: string[]): { lines: string[]; nextIndex: number } | null {
   const opener = lines[0];
   if (opener === "---" || opener === "+++") {
@@ -422,8 +479,4 @@ function slugify(text: string): string {
     .replace(/[^\p{L}\p{N}]+/gu, "-")
     .replace(/^-+|-+$/g, "");
   return slug || "section";
-}
-
-function markLine(html: string, line: number): string {
-  return html.replace(/^<([a-zA-Z0-9-]+)/, `<$1 data-line="${line}"`);
 }
