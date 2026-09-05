@@ -40,6 +40,8 @@ Tag a version (`v0.3.6`) to cut a new release. GitHub Actions builds Windows and
 - HTML files and raw HTML in Markdown
 - Remembers recent files and last folders
 - Offline, no account
+- <img width="1871" height="1022" alt="image" src="https://github.com/user-attachments/assets/1f74a330-71a3-4df2-978c-f5fead1e4b9d" />
+
 - <img width="1901" height="1023" alt="image" src="https://github.com/user-attachments/assets/182a30c2-890c-49bf-8bc9-87abadb64017" />
 <img width="1895" height="993" alt="image" src="https://github.com/user-attachments/assets/2850192c-c260-4b6f-b4d8-9f6e5257916f" />
 <img width="1914" height="1026" alt="image" src="https://github.com/user-attachments/assets/9d81a869-06a2-4f99-a0fa-5c4a6e6fcd75" />
