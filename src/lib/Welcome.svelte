@@ -34,7 +34,7 @@
       lead: "Everything important is a shortcut. The palette is the fastest way to discover the rest.",
       points: [
         { label: "Ctrl+K", detail: "Command palette — open, export, theme, updates." },
-        { label: "Ctrl+B", detail: "Outline — click a heading to jump." },
+        { label: "Type /", detail: "Snippet menu — headings, tables, code, callouts." },
         { label: "Ctrl+F / Ctrl+H", detail: "Find, then replace one or all." }
       ]
     },

@@ -12,6 +12,10 @@ export interface Prefs {
   outline: boolean;
   zoom: number;
   mode: ViewMode;
+  proofread: boolean;
+  vim: boolean;
+  typewriter: boolean;
+  focus: boolean;
   recents: RecentFile[];
   lastFile: RecentFile | null;
   lastOpenDir: string | null;
@@ -28,6 +32,10 @@ const defaults: Prefs = {
   outline: true,
   zoom: 100,
   mode: "split",
+  proofread: true,
+  vim: false,
+  typewriter: false,
+  focus: false,
   recents: [],
   lastFile: null,
   lastOpenDir: null,
@@ -48,6 +56,10 @@ export function loadPrefs(): Prefs {
       outline: typeof parsed.outline === "boolean" ? parsed.outline : defaults.outline,
       zoom: clampZoom(typeof parsed.zoom === "number" ? parsed.zoom : defaults.zoom),
       mode: parsed.mode === "reader" || parsed.mode === "split" || parsed.mode === "editor" ? parsed.mode : defaults.mode,
+      proofread: typeof parsed.proofread === "boolean" ? parsed.proofread : defaults.proofread,
+      vim: parsed.vim === true,
+      typewriter: parsed.typewriter === true,
+      focus: parsed.focus === true,
       recents: Array.isArray(parsed.recents) ? parsed.recents.filter(isRecent) : [],
       lastFile: parsed.lastFile && isRecent(parsed.lastFile) ? parsed.lastFile : null,
       lastOpenDir: stringOrNull(parsed.lastOpenDir),

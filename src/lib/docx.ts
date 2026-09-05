@@ -1,4 +1,5 @@
 import type { MarkdownBlock, ParsedMarkdown } from "./markdown";
+import { parseInline, type InlineRun } from "./rich-text.ts";
 
 interface ZipEntry {
   path: string;
@@ -45,7 +46,7 @@ function documentXml(parsed: ParsedMarkdown): string {
 function blockToOpenXml(block: MarkdownBlock): string {
   switch (block.type) {
     case "heading":
-      return paragraph(block.text, `Heading${block.depth}`);
+      return paragraph(block.text, `Heading${Math.min(6, Math.max(1, block.depth))}`);
     case "paragraph":
       return paragraph(block.lines.join(" "));
     case "quote":
@@ -58,26 +59,70 @@ function blockToOpenXml(block: MarkdownBlock): string {
           const task = item.match(/^\[([ xX])\]\s*(.*)$/);
           if (task) {
             const done = task[1].toLowerCase() === "x";
-            const text = stripInline(task[2] ?? "");
-            return paragraph(done ? `${text} (done)` : text);
+            const text = done ? `☒ ${task[2] ?? ""} (done)` : `☐ ${task[2] ?? ""}`;
+            return paragraph(text, done ? "Quote" : undefined);
           }
-          return paragraph(`${block.ordered ? `${index + 1}.` : "-"} ${stripInline(item)}`);
+          return paragraph(item, undefined, block.ordered ? `${index + 1}. ` : "• ");
         })
         .join("");
     case "table":
-      return block.rows.map((row) => paragraph(row.join("    "))).join("");
+      return tableToOpenXml(block.rows, block.aligns);
     case "html":
       return paragraph(block.lines.join(" "));
     case "rule":
-      return paragraph("");
+      return ruleParagraph();
     case "frontmatter":
       return "";
   }
 }
 
-function paragraph(text: string, style?: string): string {
+function tableToOpenXml(rows: string[][], aligns: Array<"left" | "center" | "right">): string {
+  const normalized = rows.map((row) => row.map(stripInline));
+  const body = normalized
+    .map((row, rowIndex) => {
+      const cells = row.map((cell, cellIndex) => tableCell(cell, aligns[cellIndex] ?? "left", rowIndex === 0));
+      return `<w:tr>${cells.join("")}</w:tr>`;
+    })
+    .join("");
+  return `<w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/><w:tblBorders><w:top w:val="single" w:sz="4" w:color="BFBAB0"/><w:left w:val="single" w:sz="4" w:color="BFBAB0"/><w:bottom w:val="single" w:sz="4" w:color="BFBAB0"/><w:right w:val="single" w:sz="4" w:color="BFBAB0"/><w:insideH w:val="single" w:sz="4" w:color="BFBAB0"/><w:insideV w:val="single" w:sz="4" w:color="BFBAB0"/></w:tblBorders></w:tblPr><w:tblGrid>${gridCols(normalized)}</w:tblGrid>${body}</w:tbl>`;
+}
+
+function gridCols(rows: string[][]): string {
+  const cols = Math.max(1, ...rows.map((row) => row.length));
+  return Array.from({ length: cols }, () => `<w:gridCol w:w="2400"/>`).join("");
+}
+
+function tableCell(text: string, align: "left" | "center" | "right", header: boolean): string {
+  const jc = header || align === "center" ? "center" : align;
+  return `<w:tc><w:tcPr><w:jc w:val="${jc}"/>${
+    header ? "<w:shd w:val=\"clear\" w:fill=\"EFEBE4\"/>" : ""
+  }</w:tcPr><w:p><w:r>${runProps(true, false, false, false)}<w:t xml:space="preserve">${escapeXml(text)}</w:t></w:r></w:p></w:tc>`;
+}
+
+function ruleParagraph(): string {
+  return `<w:p><w:pPr><w:pBdr><w:bottom w:val="single" w:sz="6" w:color="BFBAB0"/></w:pBdr></w:pPr><w:r><w:t xml:space="preserve"> </w:t></w:r></w:p>`;
+}
+
+function paragraph(text: string, style?: string, prefix = ""): string {
   const styleXml = style ? `<w:pPr><w:pStyle w:val="${style}"/></w:pPr>` : "";
-  return `<w:p>${styleXml}<w:r><w:t xml:space="preserve">${escapeXml(stripInline(text))}</w:t></w:r></w:p>`;
+  const runs = parseInline(`${prefix}${text}`)
+    .map(runToOpenXml)
+    .join("");
+  return `<w:p>${styleXml}${runs || "<w:r><w:t xml:space=\"preserve\"> </w:t></w:r>"}</w:p>`;
+}
+
+function runToOpenXml(run: InlineRun): string {
+  return `<w:r>${runProps(run.bold, run.italic, run.code, run.strike)}<w:t xml:space="preserve">${escapeXml(run.text)}</w:t></w:r>`;
+}
+
+function runProps(bold: boolean, italic: boolean, code: boolean, strike: boolean): string {
+  const props = [
+    bold ? "<w:b/>" : "",
+    italic ? "<w:i/>" : "",
+    strike ? "<w:strike/>" : "",
+    code ? '<w:rFonts w:ascii="Cascadia Code" w:hAnsi="Cascadia Code"/><w:shd w:val="clear" w:fill="EFEBE4"/>' : ""
+  ].join("");
+  return props ? `<w:rPr>${props}</w:rPr>` : "";
 }
 
 function contentTypesXml(): string {
@@ -109,6 +154,9 @@ function stylesXml(): string {
   <w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/><w:pPr><w:keepNext/></w:pPr><w:rPr><w:b/><w:sz w:val="36"/></w:rPr></w:style>
   <w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/><w:basedOn w:val="Normal"/><w:pPr><w:keepNext/></w:pPr><w:rPr><w:b/><w:sz w:val="30"/></w:rPr></w:style>
   <w:style w:type="paragraph" w:styleId="Heading3"><w:name w:val="heading 3"/><w:basedOn w:val="Normal"/><w:pPr><w:keepNext/></w:pPr><w:rPr><w:b/><w:sz w:val="26"/></w:rPr></w:style>
+  <w:style w:type="paragraph" w:styleId="Heading4"><w:name w:val="heading 4"/><w:basedOn w:val="Normal"/><w:pPr><w:keepNext/></w:pPr><w:rPr><w:b/><w:sz w:val="24"/></w:rPr></w:style>
+  <w:style w:type="paragraph" w:styleId="Heading5"><w:name w:val="heading 5"/><w:basedOn w:val="Normal"/><w:pPr><w:keepNext/></w:pPr><w:rPr><w:b/><w:sz w:val="22"/></w:rPr></w:style>
+  <w:style w:type="paragraph" w:styleId="Heading6"><w:name w:val="heading 6"/><w:basedOn w:val="Normal"/><w:pPr><w:keepNext/></w:pPr><w:rPr><w:b/><w:sz w:val="22"/></w:rPr></w:style>
   <w:style w:type="paragraph" w:styleId="Quote"><w:name w:val="Quote"/><w:basedOn w:val="Normal"/><w:pPr><w:ind w:left="360"/></w:pPr><w:rPr><w:i/><w:color w:val="555555"/></w:rPr></w:style>
   <w:style w:type="paragraph" w:styleId="Code"><w:name w:val="Code"/><w:basedOn w:val="Normal"/><w:rPr><w:rFonts w:ascii="Cascadia Code" w:hAnsi="Cascadia Code"/><w:sz w:val="20"/></w:rPr></w:style>
 </w:styles>`);

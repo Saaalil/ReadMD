@@ -2,6 +2,10 @@ import "katex/dist/katex.min.css";
 import renderMathInElement from "katex/contrib/auto-render";
 import MarkdownIt, { type Env, type Token } from "markdown-it";
 import { renderMarkdownImage, rewriteHtmlMedia } from "./media";
+import { mermaidFigureHtml } from "./mermaid.ts";
+import { wikiAnchorHtml } from "./wiki.ts";
+
+const wikiPattern = /\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]*))?\]\]/g;
 
 type Line = { startLine: number };
 
@@ -155,6 +159,42 @@ function decorateTokens(tokens: Token[], offset: number, outline: OutlineItem[])
 
   transformTaskLists(tokens);
   transformCallouts(tokens);
+  transformWikiLinks(tokens);
+}
+
+function transformWikiLinks(tokens: Token[]): void {
+  for (const token of tokens) {
+    if (token.type !== "inline" || !token.children) continue;
+    const next: Token[] = [];
+    for (const child of token.children) {
+      if (child.type !== "text" || !child.content.includes("[[")) {
+        next.push(child);
+        continue;
+      }
+      let last = 0;
+      let matched = false;
+      for (const match of child.content.matchAll(wikiPattern)) {
+        matched = true;
+        const start = match.index ?? 0;
+        if (start > last) next.push(textToken(child.content.slice(last, start)));
+        const target = (match[1] ?? "").trim();
+        next.push(htmlToken(wikiAnchorHtml((match[2] ?? target).trim() || target, target)));
+        last = start + match[0].length;
+      }
+      if (!matched) {
+        next.push(child);
+        continue;
+      }
+      if (last < child.content.length) next.push(textToken(child.content.slice(last)));
+    }
+    token.children = next;
+  }
+}
+
+function textToken(content: string): Token {
+  const token = new TokenClass("text", "", 0);
+  token.content = content;
+  return token;
 }
 
 function transformTaskLists(tokens: Token[]): void {
@@ -260,7 +300,7 @@ function renderCodeToken(token: Token): string {
   const content = escapeHtml(token.content.replace(/\n$/, ""));
   const attrs = attrText(token);
   if (language.toLowerCase() === "mermaid") {
-    return `<figure class="diagram"${attrs}><figcaption>Mermaid</figcaption><pre><code${languageAttr}>${content}</code></pre></figure>`;
+    return mermaidFigureHtml(token.content.replace(/\n$/, ""), attrs);
   }
   const label = escapeHtml(language || "text");
   return `<figure class="code-block"${attrs}><figcaption class="code-toolbar"><span>${label}</span><button type="button" class="copy-code">Copy</button></figcaption><pre><code${languageAttr}>${content}</code></pre></figure>`;

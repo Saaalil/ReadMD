@@ -6,6 +6,8 @@
   import { withExtension } from "./lib/download";
   import { previewHtmlDocument } from "./lib/html-preview";
   import { outlineFromParsed, parseMarkdown, renderMarkdown, typesetMath } from "./lib/markdown";
+  import { renderMermaid } from "./lib/mermaid";
+  import { backlinksFor, stemOf } from "./lib/wiki";
   import { applyPreviewMedia, cacheMediaBytes, hydrateLocalImages, rewriteHtmlMedia } from "./lib/media";
   import { collectMatches } from "./lib/find";
   import { lineAtRoot, scrollRootToLine } from "./lib/scroll-sync";
@@ -21,9 +23,12 @@
     pastedStoreDir,
     pastedStoreDirSync,
     readBytes,
+    readVaultFile,
     saveFile,
+    scanVault,
     setWindowTitle,
-    type OpenedFile
+    type OpenedFile,
+    type VaultFile as NativeVaultFile
   } from "./lib/native";
   import { renderPlainText } from "./lib/plain-render";
   import { markdownToCleanText } from "./lib/plain-text";
@@ -101,6 +106,12 @@ export function hello() {
   let lastSaveDir = $state(initial.lastSaveDir);
   let lastExportDir = $state(initial.lastExportDir);
   let onboarded = $state(initial.onboarded);
+  let proofreadOn = $state(initial.proofread);
+  let vimOn = $state(initial.vim);
+  let typewriterOn = $state(initial.typewriter);
+  let focusOn = $state(initial.focus);
+  let backlinks = $state<NativeVaultFile[]>([]);
+  let frontmatterOpen = $state(false);
   let welcomeOpen = $state(!initial.onboarded);
   let notice = $state<{
     kind: "error" | "ok";
@@ -168,6 +179,7 @@ export function hello() {
     return renderMarkdown(parsed, docDir);
   });
   let outline = $derived(kind === "markdown" ? outlineFromParsed(parsed) : []);
+  let frontmatter = $derived(kind === "markdown" && parsed.blocks[0]?.type === "frontmatter" ? parsed.blocks[0].lines : []);
   let title = $derived(fileName.replace(/\.[^.]+$/, "") || "Untitled");
   let words = $derived(previewSource.trim() ? previewSource.trim().split(/\s+/).length : 0);
   let chars = $derived(previewSource.length);
@@ -184,6 +196,10 @@ export function hello() {
       outline: outlineOpen,
       zoom,
       mode,
+      proofread: proofreadOn,
+      vim: vimOn,
+      typewriter: typewriterOn,
+      focus: focusOn,
       recents,
       lastFile,
       lastOpenDir,
@@ -206,6 +222,30 @@ export function hello() {
   });
 
   $effect(() => {
+    const dir = docDir;
+    const name = fileName;
+    if (!dir || kind !== "markdown") {
+      backlinks = [];
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const files = await scanVault(dir);
+      const reads = new Map<string, string>();
+      await Promise.all(
+        files.slice(0, 60).map(async (file) => {
+          const text = await readVaultFile(file.path, dir);
+          if (text != null) reads.set(file.path, text);
+        })
+      );
+      if (!cancelled) backlinks = backlinksFor(files, reads, stemOf(name));
+    })();
+    return () => {
+      cancelled = true;
+    };
+  });
+
+  $effect(() => {
     html;
     mediaTick;
     if (!previewEl || kind === "html") return;
@@ -213,6 +253,9 @@ export function hello() {
     if (!(prose instanceof HTMLElement)) return;
     typesetMath(prose);
     applyPreviewMedia(prose, docDir);
+    if (prose.querySelector("figure.diagram-mermaid")) {
+      void renderMermaid(prose, appearance === "dark");
+    }
   });
 
   $effect(() => {
@@ -418,6 +461,30 @@ export function hello() {
       showNotice("error", "That file could not be opened.");
       return;
     }
+    frontmatterOpen = false;
+    loadDocument(file);
+  }
+
+  async function openWikiLink(target: string): Promise<void> {
+    const name = target.trim();
+    if (!name || !docDir) {
+      showNotice("error", name ? "Wiki-links need a saved file." : "Empty link.");
+      return;
+    }
+    const files = filePath ? await scanVault(docDir) : [];
+    const stem = stemOf(name).toLowerCase();
+    const match = files.find((file) => stemOf(file.name).toLowerCase() === stem);
+    if (!match) {
+      showNotice("error", `No note named “${name}” in this folder.`);
+      return;
+    }
+    if (!(await confirmDiscard())) return;
+    const file = await openFileAtPath(match.path);
+    if (!file) {
+      showNotice("error", "That note could not be opened.");
+      return;
+    }
+    frontmatterOpen = false;
     loadDocument(file);
   }
 
@@ -529,6 +596,19 @@ export function hello() {
   function cycleTheme(): void {
     themePref = themePref === "dark" ? "light" : themePref === "light" ? "system" : "dark";
     showNotice("ok", `Theme: ${themePref}.`);
+  }
+
+  function insertTable(): void {
+    closeOverlays();
+    if (mode === "reader") switchMode("split");
+    if (editor) {
+      editor.insertAtCursor("\n|  |  |\n| --- | --- |\n|  |  |\n");
+      return;
+    }
+    markdown += "\n|  |  |\n| --- | --- |\n|  |  |\n";
+    previewSource = markdown;
+    dirty = true;
+    scheduleAutoSave();
   }
 
   function switchMode(next: Mode): void {
@@ -750,6 +830,12 @@ export function hello() {
   function handleWindowClick(event: MouseEvent): void {
     const target = event.target as HTMLElement;
     if (!target.closest("[data-menu]")) menu = null;
+    const wiki = target.closest(".wiki-link");
+    if (wiki instanceof HTMLAnchorElement) {
+      event.preventDefault();
+      void openWikiLink(wiki.dataset.wiki ?? "");
+      return;
+    }
     const copy = target.closest(".copy-code");
     if (copy instanceof HTMLButtonElement) {
       const code = copy.closest(".code-block")?.querySelector("code")?.textContent ?? "";
@@ -1047,6 +1133,11 @@ export function hello() {
     { id: "txt", label: "Export TXT", hint: "", run: () => void exportTxt() },
     { id: "copy-html", label: "Copy HTML", hint: "", run: () => void copyHtml() },
     { id: "copy-text", label: "Copy plain text", hint: "", run: () => void copyText() },
+    { id: "insert-table", label: "Insert table", hint: "", run: insertTable },
+    { id: "proofread", label: proofreadOn ? "Turn off proofreading" : "Turn on proofreading", hint: "", run: () => { closeOverlays(); proofreadOn = !proofreadOn; } },
+    { id: "vim", label: vimOn ? "Vim mode: off" : "Vim mode: on", hint: "", run: () => { closeOverlays(); vimOn = !vimOn; } },
+    { id: "typewriter", label: typewriterOn ? "Typewriter: off" : "Typewriter: on", hint: "", run: () => { closeOverlays(); typewriterOn = !typewriterOn; } },
+    { id: "focus", label: focusOn ? "Focus mode: off" : "Focus mode: on", hint: "", run: () => { closeOverlays(); focusOn = !focusOn; } },
     { id: "welcome", label: "Welcome tour", hint: "", run: replayWelcome },
     { id: "shortcuts", label: "Keyboard shortcuts", hint: "Ctrl+/", run: () => { paletteOpen = false; menu = "shortcuts"; } }
   ]);
@@ -1216,11 +1307,27 @@ export function hello() {
             </button>
           {/each}
         {/if}
+        {#if frontmatter.length > 0}
+          <button class="outline-item outline-toggle" onclick={() => (frontmatterOpen = !frontmatterOpen)} aria-expanded={frontmatterOpen}>
+            {frontmatterOpen ? "▾ Frontmatter" : "▸ Frontmatter"}
+          </button>
+          {#if frontmatterOpen}
+            <pre class="frontmatter">{frontmatter.join("\n")}</pre>
+          {/if}
+        {/if}
+        {#if backlinks.length > 0}
+          <p class="outline-title">Backlinks</p>
+          {#each backlinks as link (link.path)}
+            <button class="outline-item" onclick={() => void openWikiLink(stemOf(link.name))}>
+              {link.name}
+            </button>
+          {/each}
+        {/if}
       </aside>
     {/if}
 
     <section class="editor-pane" aria-label="Document editor">
-        <CodeEditor bind:this={editor} value={markdown} appearance={appearance} language={kind} onChange={handleEditorChange} onScroll={syncPreviewFromEditor} />
+        <CodeEditor bind:this={editor} value={markdown} appearance={appearance} language={kind} proofreadOn={proofreadOn} vimOn={vimOn} typewriterOn={typewriterOn} focusOn={focusOn} onChange={handleEditorChange} onScroll={syncPreviewFromEditor} />
       </section>
 
       <article class="preview-pane" bind:this={previewEl} aria-label="Rendered preview" onscroll={syncEditorFromPreview}>
@@ -1309,6 +1416,9 @@ export function hello() {
           <div><dt>Save as</dt><dd>Ctrl+Shift+S</dd></div>
           <div><dt>Reader / Split / Editor</dt><dd>Ctrl+1 / 2 / 3</dd></div>
           <div><dt>Paste image</dt><dd>Ctrl+V</dd></div>
+          <div><dt>Slash menu</dt><dd>Type / in the editor</dd></div>
+          <div><dt>Table cell</dt><dd>Tab / Shift+Tab</dd></div>
+          <div><dt>Format table</dt><dd>Ctrl+Shift+T</dd></div>
           <div><dt>Zoom</dt><dd>Ctrl + − 0</dd></div>
           <div><dt>Export PDF</dt><dd>Ctrl+P</dd></div>
         </dl>

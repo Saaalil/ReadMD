@@ -590,6 +590,10 @@ button:disabled {
   text-underline-offset: 3px;
 }
 
+.prose a.wiki-link {
+  text-decoration-style: dotted;
+}
+
 .prose img,
 .prose .md-image {
   display: block;
@@ -736,6 +740,62 @@ button:disabled {
   margin-bottom: 6px;
   color: var(--muted);
   font-size: 12px;
+}
+
+.diagram-mermaid {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px 16px;
+  background: var(--bg-raised);
+}
+
+.diagram-mermaid pre.mermaid {
+  overflow: auto;
+  margin: 0;
+  padding: 12px 14px;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.diagram-mermaid .mermaid-svg svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.diagram-mermaid.mermaid-error .mermaid-svg {
+  display: none;
+}
+
+.cm-tooltip-autocomplete .cm-completionIcon-snippet::after {
+  content: "✎";
+}
+
+.cm-tooltip-autocomplete .cm-completionIcon-text::after {
+  content: "ab";
+}
+
+.frontmatter {
+  overflow: auto;
+  margin: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  color: var(--muted);
+  background: var(--bg);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.outline-toggle {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.cm-lint-marker-warning::before {
+  color: var(--muted);
 }
 
 .prose ul.task-list {

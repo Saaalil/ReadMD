@@ -171,6 +171,29 @@ export async function readBytes(path: string): Promise<Uint8Array> {
   return Uint8Array.from(contents);
 }
 
+export interface VaultFile {
+  name: string;
+  path: string;
+}
+
+export async function scanVault(dir: string): Promise<VaultFile[]> {
+  if (!isTauriRuntime()) return [];
+  try {
+    return await invoke<VaultFile[]>("scan_vault", { dir });
+  } catch {
+    return [];
+  }
+}
+
+export async function readVaultFile(path: string, dir: string): Promise<string | null> {
+  if (!isTauriRuntime()) return null;
+  try {
+    return await invoke<string>("read_vault_file", { path, dir });
+  } catch {
+    return null;
+  }
+}
+
 let pasteStore: string | null = null;
 
 export async function pastedStoreDir(): Promise<string> {

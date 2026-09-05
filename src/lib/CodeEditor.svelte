@@ -15,22 +15,54 @@
     rectangularSelection
   } from "@codemirror/view";
   import { tags as t } from "@lezer/highlight";
+  import { vim } from "@replit/codemirror-vim";
+  import { completionExtension } from "./complete";
+  import { proofreadComp, proofreadExtension } from "./proofread";
+  import { tableKeymap } from "./table-edit";
   import { onDestroy, onMount } from "svelte";
 
   interface Props {
     value: string;
     appearance: "dark" | "light";
     language: "markdown" | "html" | "text";
+    proofreadOn: boolean;
+    vimOn: boolean;
+    typewriterOn: boolean;
+    focusOn: boolean;
     onChange: (value: string) => void;
     onScroll?: () => void;
   }
 
-  let { value, appearance, language, onChange, onScroll }: Props = $props();
+  let { value, appearance, language, proofreadOn, vimOn, typewriterOn, focusOn, onChange, onScroll }: Props = $props();
   let host: HTMLDivElement;
   let view: EditorView | null = null;
   let internalUpdate = false;
   const themeComp = new Compartment();
   const langComp = new Compartment();
+  const vimComp = new Compartment();
+  const modeComp = new Compartment();
+
+  function typewriterExtension(enabled: boolean) {
+    if (!enabled) return [];
+    return EditorView.updateListener.of((update) => {
+      if (!update.docChanged) return;
+      const head = update.state.selection.main.head;
+      requestAnimationFrame(() => {
+        view?.dispatch({ effects: EditorView.scrollIntoView(head, { y: "center" }) });
+      });
+    });
+  }
+
+  function focusTheme(enabled: boolean) {
+    return EditorView.theme(
+      enabled
+        ? {
+            ".cm-line:not(.cm-activeLine)": { opacity: "0.4" },
+            ".cm-activeLine": { opacity: "1" }
+          }
+        : {}
+    );
+  }
 
   const darkHighlight = HighlightStyle.define([
     { tag: t.heading, color: "#f3f1ec", fontWeight: "700" },
@@ -201,6 +233,11 @@
           bracketMatching(),
           langComp.of(languageExtension(language)),
           EditorView.lineWrapping,
+          vimComp.of(vimOn ? vim() : []),
+          proofreadComp.of(language === "markdown" && proofreadOn ? proofreadExtension(true) : []),
+          modeComp.of([typewriterExtension(typewriterOn), focusTheme(focusOn)]),
+          keymap.of(tableKeymap),
+          completionExtension(),
           keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
           themeComp.of(themeExtensions(appearance === "dark")),
           EditorView.updateListener.of((update) => {
@@ -222,6 +259,24 @@
   $effect(() => {
     view?.dispatch({
       effects: langComp.reconfigure(languageExtension(language))
+    });
+  });
+
+  $effect(() => {
+    view?.dispatch({
+      effects: vimComp.reconfigure(vimOn ? vim() : [])
+    });
+  });
+
+  $effect(() => {
+    view?.dispatch({
+      effects: proofreadComp.reconfigure(language === "markdown" && proofreadOn ? proofreadExtension(true) : [])
+    });
+  });
+
+  $effect(() => {
+    view?.dispatch({
+      effects: modeComp.reconfigure([typewriterExtension(typewriterOn), focusTheme(focusOn)])
     });
   });
 
